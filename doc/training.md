@@ -7,7 +7,7 @@ conda activate brouhaha
 pip install https://github.com/marianne-m/pyannote-brouhaha-db.git
 ```
 
-Your database must have a train/dev/test split. Each set must have the following tree structure :
+Your database must have a train/dev/test split. Each set must have the following tree structure:
 
 ```
 train/
