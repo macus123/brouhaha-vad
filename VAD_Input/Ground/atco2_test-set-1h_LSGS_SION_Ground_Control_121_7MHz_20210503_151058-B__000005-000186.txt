@@ -1,0 +1,1 @@
+0.05000000074505806	1.8600000143051147	taxi going around nav checker five one one
