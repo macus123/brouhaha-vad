@@ -157,3 +157,5 @@ cython_debug/
 
 # data files
 /data
+VAD_Output/
+VAD_Input/
