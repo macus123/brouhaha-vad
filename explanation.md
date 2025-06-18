@@ -45,3 +45,10 @@ noise_merge.py:
 
 padding_ratio param: changes how much noise padding to add, eg. 0.5 = 50% of speech length
 target_snr param: controls how prominent the noise is during the speech
+
+TODO:
+create a function where it takes in a .wav file, args are (x) hours for the length of the final output
+input .wav -> split portions into speech and non-speech based on ground truth -> run brouhaha on non-speech portions -> take only the top and bottom 20% portions of SNR -> extract noise from those portions (TBC) 
+
+create a function where it takes in a .wav file, args are (x) hours for the length of the final output
+input .wav -> split portions into speech and non-speech based on ground truth -> maybe generate a temp metadata file mapping split portions to timestamps of the original .wav file in order to respect the temporal order for the next operation -> centre around speech portions with a bit of padding, splice everything together including non-speech portions to achieve the (x) hours parameter eg. 10 hrs with 7 hrs of speech, x parameter is 2 hours, so must achieve a ratio of 1:1 speech to non-speech with respect to the temporal order, output would be a recompiled version of the .wav in 2 hrs
