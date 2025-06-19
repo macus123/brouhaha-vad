@@ -127,3 +127,34 @@ start_time[TAB]end_time[TAB]optional_text
 eg.
 13.450000	15.320000	Speech segment 1
 17.890000	22.670000	Speech segment 2
+
+TESTING
+
+original 40 min video:
+Found 150 speech segments
+Speech: 388.26s (16.0% of audio)
+Non-speech: 2041.55s (84.0% of audio)
+Audio file: my_gt_data\audio\recording.wav
+Ground truth file: my_gt_data\ground_truth\recording.txt
+Found 150 speech segments
+Speech duration: 388.26s
+Non-speech duration: 2041.55s
+Total duration: 2429.81s
+
+coverted using convert_wav.py to 8 mins, achieving a 1:1 ratio of speech to non-speech
+Target: 0.14 hours (486.0 seconds) with 1:1 speech/non-speech ratio
+Original audio: 0:40:29.806000
+Balanced output: my_gt_data\Recompiled_Output\recording_balanced_0.1h.wav
+Speech content: 0.07 hours
+Non-speech content: 0.07 hours
+Excess speech: 0.06 hours
+Excess non-speech: 0.48 hours
+
+testing using brouhaha for the proportion of speech to non-speech segments in the new spliced .wav file:
+Speech duration: 200.00s
+Non-speech duration: 286.00s
+Total duration: 486.00s
+Total duration: 486.00s
+Speech percentage: 41.2%
+
+spliced audio has an increase in speech proportion of 16% to 41.2%, upon re-evaluation using the brouhaha model
