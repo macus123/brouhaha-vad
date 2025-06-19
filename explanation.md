@@ -120,3 +120,10 @@ Speech/non-speech percentages
 3. Preserves excess content in separate files
 4. Maintains temporal ordering throughout the process
 5. Generates comprehensive metadata for the processing
+
+expected ground truth format:
+start_time[TAB]end_time[TAB]optional_text
+
+eg.
+13.450000	15.320000	Speech segment 1
+17.890000	22.670000	Speech segment 2

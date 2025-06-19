@@ -6,7 +6,15 @@ import torchaudio
 import numpy as np
 
 def read_ground_truth(gt_file):
-    """Read ground truth segments from file."""
+    """
+    Read ground truth segments from file.
+    
+    Args:
+        gt_file: Path to a ground truth file with tab-separated timestamps and text
+        
+    Returns:
+        Sorted list of (start_time, end_time) tuples
+    """
     segments = []
     with open(gt_file, 'r') as f:
         for line in f:
@@ -19,7 +27,16 @@ def read_ground_truth(gt_file):
     return sorted(segments)
 
 def get_non_speech_segments(speech_segments, total_duration):
-    """Identify non-speech segments between speech segments."""
+    """
+    Identify non-speech segments between speech segments.
+    
+    Args:
+        speech_segments: List of (start_time, end_time) tuples representing speech
+        total_duration: Total duration of the audio in seconds
+        
+    Returns:
+        List of (start_time, end_time) tuples representing non-speech segments
+    """
     non_speech = []
     current_time = 0.0
     
@@ -35,7 +52,17 @@ def get_non_speech_segments(speech_segments, total_duration):
     return non_speech
 
 def save_audio_safely(audio_segment, file_path, sample_rate=16000):
-    """Safely save audio using torchaudio for better format control."""
+    """
+    Safely save audio using torchaudio for better format control.
+    
+    Args:
+        audio_segment: pydub AudioSegment to save
+        file_path: Path where the audio will be saved
+        sample_rate: Sample rate of the audio (default: 16000)
+        
+    Returns:
+        Boolean indicating success or failure
+    """
     # Check if the audio segment is empty
     if len(audio_segment) == 0:
         print(f"Warning: Empty audio segment for {file_path}")
@@ -105,7 +132,14 @@ def save_audio_safely(audio_segment, file_path, sample_rate=16000):
         return False
 
 def split_audio(audio_path, gt_path, output_base_dir):
-    """Split audio file into two files: one with all speech segments, one with all non-speech segments."""
+    """
+    Split audio file into two files: one with all speech segments, one with all non-speech segments.
+    
+    Args:
+        audio_path: Path to the audio file
+        gt_path: Path to the ground truth file
+        output_base_dir: Base directory for output files
+    """
     print(f"Processing: {audio_path}")
     
     # Extract the split name (TRAIN, TEST, or DEV)
@@ -185,9 +219,10 @@ def split_audio(audio_path, gt_path, output_base_dir):
             print(f"Original: {original_length}ms, Combined: {combined_length}ms")
             
     except Exception as e:
-        print(f"Error processing {audio_path}:{str(e)}")
+        print(f"Error processing {audio_path}: {str(e)}")
 
 def main():
+    """Main function to process all audio files with ground truth."""
     base_dir = Path("VAD_Input")
     output_base_dir = Path("VAD_Output")
     splits = ["DEV", "TEST", "TRAIN"]
@@ -208,5 +243,6 @@ def main():
             else:
                 print(f"Warning: No ground truth found for {audio_file.name}")
 
+# Only execute the main function if the script is run directly
 if __name__ == "__main__":
     main()

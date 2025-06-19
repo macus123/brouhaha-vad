@@ -1,0 +1,22 @@
+RECOMPILATION METADATA
+====================
+
+Original file: recording.wav
+Ground truth: my_gt_data/ground_truth/recording.txt
+Target duration: 0.14 hours
+Speech padding: 300 ms
+
+Original duration: 0:40:29.806000
+Original speech: 0:07:49.775625 (19.3%)
+Original non-speech: 0:32:40.030375 (80.7%)
+
+Balanced output file: recording_balanced_0.1h.wav
+  Duration: 0:08:06.001000
+  Speech: 0:04:03 (50.0%)
+  Non-speech: 0:04:03 (50.0%)
+
+Excess speech file: recording_excess_speech.wav
+  Duration: 0:03:46.778000
+
+Excess non-speech file: recording_excess_non_speech.wav
+  Duration: 0:28:37.027000

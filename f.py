@@ -56,10 +56,12 @@ def recompile_balanced_audio(
     speech_segments = read_ground_truth(ground_truth)
     non_speech_segments = get_non_speech_segments(speech_segments, total_duration_ms/1000.0)
     
-    # Apply padding to speech segments
+    # apply padding to speech segments, padding each segment by speech_padding_ms - extending the time boundaries of each speech segment before and after each speech segment
+    # padding is taken from neighboring non-speech segments
     padded_speech_segments = []
     for start, end in speech_segments:
-        # Add padding but respect file boundaries
+        # max(0, ...) ensures padding doesn't go before start of audio
+        # min(total_duration_ms, ...) ensures padding doesn't go beyond end of audio
         padded_start = max(0, start * 1000 - speech_padding_ms) / 1000
         padded_end = min(total_duration_ms, end * 1000 + speech_padding_ms) / 1000
         padded_speech_segments.append((padded_start, padded_end))
@@ -70,6 +72,7 @@ def recompile_balanced_audio(
         padded_speech_segments.sort(key=lambda x: x[0])
         current_start, current_end = padded_speech_segments[0]
         
+        # this loop prevents chopping up closely spaced speech segments that now overlap due to padding
         for start, end in padded_speech_segments[1:]:
             if start <= current_end:
                 # Merge with current segment
@@ -104,6 +107,9 @@ def recompile_balanced_audio(
         
         print(f"Adjusted target: {format_duration(target_ms)} ({target_ms/1000/3600:.2f} hours)")
     
+    """
+    segment selection logic
+    """
     # Create timeline of all segments
     timeline = []
     
@@ -282,11 +288,11 @@ def format_duration(ms):
 
 if __name__ == "__main__":
     result = recompile_balanced_audio(
-        input_wav="recordings/long_session.wav",
-        ground_truth="annotations/long_session_labels.txt",
-        target_hours=2.5,
+        input_wav="recording.wav",
+        ground_truth="my_gt_data/ground_truth/recording.txt",
+        target_hours=0.1350,
         speech_padding_ms=300,
-        output_dir="Custom_Output_Directory"
+        output_dir="my_gt_data/Recompiled_Output"
     )
 
     # Access detailed results
@@ -296,3 +302,4 @@ if __name__ == "__main__":
     print(f"Excess speech: {result['excess_speech_hours']:.2f} hours")
     print(f"Excess non-speech: {result['excess_non_speech_hours']:.2f} hours")
     print(f"Metadata saved to: {result['metadata']}")
+
