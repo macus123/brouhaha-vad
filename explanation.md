@@ -154,7 +154,27 @@ testing using brouhaha for the proportion of speech to non-speech segments in th
 Speech duration: 200.00s
 Non-speech duration: 286.00s
 Total duration: 486.00s
-Total duration: 486.00s
-Speech percentage: 41.2%
+Speech: 200.00s (41.2% of audio)
+Non-speech: 286.00s (58.8% of audio)
 
 spliced audio has an increase in speech proportion of 16% to 41.2%, upon re-evaluation using the brouhaha model
+
+TLDR:
+Pipeline attempts to equalize ratio of speech to non-speech based on an arg (x hours), achieved the following results:
+Speech: 388.26s (16.0% of audio)
+Non-speech: 2041.55s (84.0% of audio)
+
+new:
+Speech: 200.00s (41.2% of audio)
+Non-speech: 286.00s (58.8% of audio)
+
+TODO:
+ideally there will be no leftover audio
+TEST set would consist of primary recompiled audio according to 1:1 ratio, specified length of time
+DEV and TRAIN set to be split 20/80, using the leftover unused sounds and silence
+importance to context, ideally use the full speech segment with padding as much as possible, do not cut it off if necessary
+implement quotas for speech and silence segments, eg. 10mins quota for both, parse the length of the .wav and pick up complete speech segments to hit the quota, using an algorithm, ensure that the speech segments and its neighbouring silence segments both add up to the quota as much as possible, eg. if speech segment 1 has too long of a silence segment right after which would not fit into the quota, skip that and search for the next speech segment that has an appropriate silence segment. if this is not possible, start over again and start looking for opportunities to trim the neighbouring silence segments to fit within the quota. keep metadata of timestamps trimmed
+
+keep metadata of the distribution of timestamps, for users to confirm that the ratio has been achieved according to the timestamps, repeat this metadata generation for train and dev sets using the leftover audio, adhere to temporal order in all cases
+
+tell users distribution of segments in recompiled .wav
