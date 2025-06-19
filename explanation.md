@@ -178,3 +178,10 @@ implement quotas for speech and silence segments, eg. 10mins quota for both, par
 keep metadata of the distribution of timestamps, for users to confirm that the ratio has been achieved according to the timestamps, repeat this metadata generation for train and dev sets using the leftover audio, adhere to temporal order in all cases
 
 tell users distribution of segments in recompiled .wav
+
+
+1. separate speech and non speech portions from given .wav based on ground truth timestamps -> 1 .wav splitting into 2, 1 speech and 1 non-speech
+2. run brouhaha model on the non-speech files so that we can find the top and bottom 20th percentile of SNR ratio
+3. bottom 20%, extract noise from .wav in this category
+4. create sound library with all the noises extracted
+5. handover to zaiming
