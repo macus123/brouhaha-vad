@@ -185,3 +185,17 @@ tell users distribution of segments in recompiled .wav
 3. bottom 20%, extract noise from .wav in this category
 4. create sound library with all the noises extracted
 5. handover to zaiming
+
+For each segment in chronological order:
+├── Is it SPEECH?
+│   ├── Does it fit in quota?
+│   │   ├── Yes → Include whole segment
+│   │   └── No → Would 10% overage work?
+│   │       ├── Yes → Include with overage
+│   │       └── No → Add to excess pile
+│   └── Quota full → Add to excess pile
+└── Is it NON-SPEECH?
+    ├── Does it fit in quota?
+    │   ├── Yes → Include whole segment  
+    │   └── No → TRIM to fit quota, add remainder to excess
+    └── Quota full → Add to excess pile
