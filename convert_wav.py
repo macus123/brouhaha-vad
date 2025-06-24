@@ -28,6 +28,9 @@ def recompile_balanced_audio(
     Returns:
         Dictionary with paths to output files and statistics
     """
+
+    file_stem = Path(input_wav).stem
+
     # Convert target hours to milliseconds
     target_ms = int(target_hours * 3600 * 1000)
     target_per_type_ms = target_ms // 2  # Equal parts speech and non-speech
@@ -134,7 +137,7 @@ def recompile_balanced_audio(
     # Sort by start time to maintain temporal order
     timeline.sort(key=lambda x: x["start"])
     
-    # Process the timeline with improved logic that preserves speech context
+    # segment selection logic
     balanced_segments = []
     remaining_segments = []
     
@@ -448,14 +451,6 @@ def recompile_balanced_audio(
                 f.write(f"Continuous segments: {train_continuous}/{len(train_timestamps)}\n")
                 f.write(f"Temporal jumps: {len(train_timestamps) - train_continuous}\n")
                 f.write(f"Detailed timestamps: timestamp_maps/{file_stem}_train_timestamps.txt\n")
-        
-        f.write(f"\nTEMPORAL ORDER PRESERVATION:\n")
-        f.write(f"============================\n")
-        f.write(f"The algorithm processes segments in chronological order from the original audio.\n")
-        f.write(f"When segments are not adjacent in the original timeline, 'temporal jumps' occur.\n")
-        f.write(f"Speech segments are kept whole to preserve context, causing some discontinuities.\n")
-        f.write(f"Non-speech segments may be split to meet duration targets.\n")
-        f.write(f"Detailed jump analysis is available in the individual timestamp files.\n")
     
     # Return statistics
     result = {
@@ -483,7 +478,7 @@ def format_duration(ms):
 
 if __name__ == "__main__":
     result = recompile_balanced_audio(
-        input_wav="recording.wav",
+        input_wav="my_gt_data/audio/recording.wav",
         ground_truth="my_gt_data/ground_truth/recording.txt",
         target_hours=0.1350,
         speech_padding_ms=300,
@@ -492,7 +487,6 @@ if __name__ == "__main__":
         dev_ratio=0.2
     )
 
-    # Access detailed results
     print(f"Balanced output: {result['balanced_output']}")
     print(f"Speech content: {result['balanced_speech_hours']:.2f} hours")
     print(f"Non-speech content: {result['balanced_non_speech_hours']:.2f} hours")

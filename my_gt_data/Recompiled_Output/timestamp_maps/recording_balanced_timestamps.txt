@@ -1,0 +1,171 @@
+TIMESTAMP MAPPING FOR BALANCED SET
+==================================================
+
+Format: [Output Time] <- [Original Time] (Type) [Continuity]
+Times in format: MM:SS.mmm
+
+Segment  1: [00:00.000 - 00:10.817] <- [00:00.000 - 00:10.818] (SILENCE) CONTINUOUS
+Segment  2: [00:10.817 - 00:13.375] <- [00:10.818 - 00:13.375] (SPEECH ) CONTINUOUS
+Segment  3: [00:13.375 - 00:14.277] <- [00:13.375 - 00:14.277] (SILENCE) CONTINUOUS
+Segment  4: [00:14.277 - 00:17.104] <- [00:14.277 - 00:17.105] (SPEECH ) CONTINUOUS
+Segment  5: [00:17.104 - 00:17.466] <- [00:17.105 - 00:17.467] (SILENCE) CONTINUOUS
+Segment  6: [00:17.466 - 00:19.450] <- [00:17.467 - 00:19.450] (SPEECH ) CONTINUOUS
+Segment  7: [00:19.450 - 00:26.916] <- [00:19.450 - 00:26.917] (SILENCE) CONTINUOUS
+Segment  8: [00:26.916 - 00:30.790] <- [00:26.917 - 00:30.790] (SPEECH ) CONTINUOUS
+Segment  9: [00:30.790 - 00:35.910] <- [00:30.790 - 00:35.911] (SILENCE) CONTINUOUS
+Segment 10: [00:35.910 - 00:39.092] <- [00:35.911 - 00:39.093] (SPEECH ) CONTINUOUS
+Segment 11: [00:39.092 - 01:03.839] <- [00:39.093 - 01:03.839] (SILENCE) CONTINUOUS
+Segment 12: [01:03.839 - 01:05.789] <- [01:03.839 - 01:05.789] (SPEECH ) CONTINUOUS
+Segment 13: [01:05.789 - 01:22.890] <- [01:05.789 - 01:22.891] (SILENCE) CONTINUOUS
+Segment 14: [01:22.890 - 01:24.756] <- [01:22.891 - 01:24.757] (SPEECH ) CONTINUOUS
+Segment 15: [01:24.756 - 01:56.185] <- [01:24.757 - 01:56.185] (SILENCE) CONTINUOUS
+Segment 16: [01:56.185 - 01:57.156] <- [01:56.185 - 01:57.157] (SPEECH ) CONTINUOUS
+Segment 17: [01:57.156 - 03:46.244] <- [01:57.157 - 03:46.244] (SILENCE) CONTINUOUS
+Segment 18: [03:46.244 - 03:51.585] <- [03:46.244 - 03:51.586] (SPEECH ) CONTINUOUS
+Segment 19: [03:51.585 - 04:15.080] <- [03:51.586 - 04:15.081] (SILENCE) CONTINUOUS
+Segment 20: [04:15.080 - 04:16.389] <- [04:15.081 - 04:16.390] (SPEECH ) CONTINUOUS
+Segment 21: [04:16.389 - 04:28.861] <- [04:16.390 - 04:28.862] (SILENCE) CONTINUOUS
+Segment 22: [04:28.861 - 04:31.132] <- [06:42.417 - 06:44.687] (SPEECH ) JUMP
+Segment 23: [04:31.132 - 04:37.942] <- [07:17.753 - 07:24.563] (SPEECH ) JUMP
+Segment 24: [04:37.942 - 04:38.762] <- [07:25.178 - 07:25.997] (SPEECH ) JUMP
+Segment 25: [04:38.762 - 04:39.986] <- [07:26.038 - 07:27.263] (SPEECH ) JUMP
+Segment 26: [04:39.986 - 04:45.395] <- [07:48.043 - 07:53.453] (SPEECH ) JUMP
+Segment 27: [04:45.395 - 04:49.843] <- [08:53.364 - 08:57.811] (SPEECH ) JUMP
+Segment 28: [04:49.843 - 04:51.455] <- [09:38.420 - 09:40.033] (SPEECH ) JUMP
+Segment 29: [04:51.455 - 04:53.742] <- [11:52.036 - 11:54.324] (SPEECH ) JUMP
+Segment 30: [04:53.742 - 04:58.291] <- [12:03.613 - 12:08.161] (SPEECH ) JUMP
+Segment 31: [04:58.291 - 04:59.094] <- [12:08.673 - 12:09.475] (SPEECH ) JUMP
+Segment 32: [04:59.094 - 05:02.596] <- [12:09.803 - 12:13.306] (SPEECH ) JUMP
+Segment 33: [05:02.596 - 05:07.280] <- [12:44.718 - 12:49.401] (SPEECH ) JUMP
+Segment 34: [05:07.280 - 05:10.394] <- [12:50.421 - 12:53.536] (SPEECH ) JUMP
+Segment 35: [05:10.394 - 05:15.770] <- [12:55.383 - 13:00.758] (SPEECH ) JUMP
+Segment 36: [05:15.770 - 05:18.885] <- [13:05.626 - 13:08.740] (SPEECH ) JUMP
+Segment 37: [05:18.885 - 05:19.569] <- [13:12.815 - 13:13.499] (SPEECH ) JUMP
+Segment 38: [05:19.569 - 05:20.540] <- [13:13.692 - 13:14.663] (SPEECH ) JUMP
+Segment 39: [05:20.540 - 05:27.417] <- [13:16.088 - 13:22.966] (SPEECH ) JUMP
+Segment 40: [05:27.417 - 05:30.278] <- [13:25.268 - 13:28.130] (SPEECH ) JUMP
+Segment 41: [05:30.278 - 05:31.992] <- [13:29.976 - 13:31.690] (SPEECH ) JUMP
+Segment 42: [05:31.992 - 05:33.892] <- [13:32.069 - 13:33.968] (SPEECH ) JUMP
+Segment 43: [05:33.892 - 05:37.327] <- [13:34.617 - 13:38.052] (SPEECH ) JUMP
+Segment 44: [05:37.327 - 05:41.589] <- [14:35.991 - 14:40.253] (SPEECH ) JUMP
+Segment 45: [05:41.589 - 05:45.463] <- [14:44.075 - 14:47.948] (SPEECH ) JUMP
+Segment 46: [05:45.463 - 05:47.143] <- [15:18.989 - 15:20.669] (SPEECH ) JUMP
+Segment 47: [05:47.143 - 05:50.460] <- [15:26.920 - 15:30.237] (SPEECH ) JUMP
+Segment 48: [05:50.460 - 05:53.118] <- [16:28.967 - 16:31.626] (SPEECH ) JUMP
+Segment 49: [05:53.118 - 05:53.803] <- [16:38.974 - 16:39.658] (SPEECH ) JUMP
+Segment 50: [05:53.803 - 05:55.787] <- [16:46.669 - 16:48.653] (SPEECH ) JUMP
+Segment 51: [05:55.787 - 05:57.990] <- [17:03.038 - 17:05.241] (SPEECH ) JUMP
+Segment 52: [05:57.990 - 06:00.176] <- [17:16.166 - 17:18.353] (SPEECH ) JUMP
+Segment 53: [06:00.176 - 06:02.277] <- [17:20.807 - 17:22.909] (SPEECH ) JUMP
+Segment 54: [06:02.277 - 06:05.104] <- [17:29.565 - 17:32.393] (SPEECH ) JUMP
+Segment 55: [06:05.104 - 06:07.291] <- [17:50.389 - 17:52.575] (SPEECH ) JUMP
+Segment 56: [06:07.291 - 06:11.030] <- [17:54.743 - 17:58.481] (SPEECH ) JUMP
+Segment 57: [06:11.030 - 06:17.503] <- [18:01.476 - 18:07.948] (SPEECH ) JUMP
+Segment 58: [06:17.503 - 06:19.875] <- [18:38.111 - 18:40.483] (SPEECH ) JUMP
+Segment 59: [06:19.875 - 06:21.234] <- [18:52.961 - 18:54.321] (SPEECH ) JUMP
+Segment 60: [06:21.234 - 06:25.327] <- [19:04.487 - 19:08.580] (SPEECH ) JUMP
+Segment 61: [06:25.327 - 06:30.231] <- [19:08.689 - 19:13.592] (SPEECH ) JUMP
+Segment 62: [06:30.231 - 06:32.687] <- [19:17.261 - 19:19.718] (SPEECH ) JUMP
+Segment 63: [06:32.687 - 06:36.612] <- [19:23.134 - 19:27.058] (SPEECH ) JUMP
+Segment 64: [06:36.612 - 06:45.734] <- [19:27.184 - 19:36.306] (SPEECH ) JUMP
+Segment 65: [06:45.734 - 06:46.587] <- [19:38.153 - 19:39.006] (SPEECH ) JUMP
+Segment 66: [06:46.587 - 06:50.157] <- [19:48.750 - 19:52.320] (SPEECH ) JUMP
+Segment 67: [06:50.157 - 06:52.967] <- [20:12.375 - 20:15.186] (SPEECH ) JUMP
+Segment 68: [06:52.967 - 06:55.440] <- [20:19.241 - 20:21.714] (SPEECH ) JUMP
+Segment 69: [06:55.440 - 06:59.466] <- [20:21.772 - 20:25.798] (SPEECH ) JUMP
+Segment 70: [06:59.466 - 07:02.935] <- [20:28.539 - 20:32.008] (SPEECH ) JUMP
+Segment 71: [07:02.935 - 07:04.969] <- [20:48.603 - 20:50.638] (SPEECH ) JUMP
+Segment 72: [07:04.969 - 07:07.340] <- [20:57.125 - 20:59.497] (SPEECH ) JUMP
+Segment 73: [07:07.340 - 07:10.826] <- [21:01.783 - 21:05.268] (SPEECH ) JUMP
+Segment 74: [07:10.826 - 07:21.534] <- [21:05.883 - 21:16.591] (SPEECH ) JUMP
+Segment 75: [07:21.534 - 07:23.991] <- [21:26.977 - 21:29.433] (SPEECH ) JUMP
+Segment 76: [07:23.991 - 07:32.033] <- [21:48.037 - 21:56.079] (SPEECH ) JUMP
+Segment 77: [07:32.033 - 07:35.350] <- [21:59.124 - 22:02.441] (SPEECH ) JUMP
+Segment 78: [07:35.350 - 07:38.397] <- [22:06.464 - 22:09.511] (SPEECH ) JUMP
+Segment 79: [07:38.397 - 07:39.031] <- [22:18.361 - 22:18.995] (SPEECH ) JUMP
+Segment 80: [07:39.031 - 07:48.507] <- [22:20.066 - 22:29.542] (SPEECH ) JUMP
+Segment 81: [07:48.507 - 07:52.330] <- [22:34.916 - 22:38.739] (SPEECH ) JUMP
+Segment 82: [07:52.330 - 07:56.811] <- [22:46.948 - 22:51.429] (SPEECH ) JUMP
+Segment 83: [07:56.811 - 08:00.365] <- [23:07.147 - 23:10.700] (SPEECH ) JUMP
+Segment 84: [08:00.365 - 08:02.011] <- [23:24.545 - 23:26.191] (SPEECH ) JUMP
+Segment 85: [08:02.011 - 08:06.358] <- [23:30.097 - 23:34.443] (SPEECH ) JUMP
+
+==================================================
+CONTINUITY ANALYSIS
+==================================================
+Total segments: 85
+Continuous segments: 21
+Temporal jumps: 64
+
+JUMP DETAILS:
+  Segment 22: Jump of 02:13.555 (from 04:28.862 to 06:42.417)
+  Segment 23: Jump of 00:33.066 (from 06:44.687 to 07:17.753)
+  Segment 24: Jump of 00:00.615 (from 07:24.563 to 07:25.178)
+  Segment 25: Jump of 00:00.041 (from 07:25.997 to 07:26.038)
+  Segment 26: Jump of 00:20.781 (from 07:27.263 to 07:48.043)
+  Segment 27: Jump of 00:59.911 (from 07:53.453 to 08:53.364)
+  Segment 28: Jump of 00:40.609 (from 08:57.811 to 09:38.420)
+  Segment 29: Jump of 02:12.004 (from 09:40.033 to 11:52.036)
+  Segment 30: Jump of 00:09.289 (from 11:54.324 to 12:03.613)
+  Segment 31: Jump of 00:00.511 (from 12:08.161 to 12:08.673)
+  Segment 32: Jump of 00:00.328 (from 12:09.475 to 12:09.803)
+  Segment 33: Jump of 00:31.412 (from 12:13.306 to 12:44.718)
+  Segment 34: Jump of 00:01.020 (from 12:49.401 to 12:50.421)
+  Segment 35: Jump of 00:01.847 (from 12:53.536 to 12:55.383)
+  Segment 36: Jump of 00:04.868 (from 13:00.758 to 13:05.626)
+  Segment 37: Jump of 00:04.074 (from 13:08.740 to 13:12.815)
+  Segment 38: Jump of 00:00.193 (from 13:13.499 to 13:13.692)
+  Segment 39: Jump of 00:01.425 (from 13:14.663 to 13:16.088)
+  Segment 40: Jump of 00:02.303 (from 13:22.966 to 13:25.268)
+  Segment 41: Jump of 00:01.847 (from 13:28.130 to 13:29.976)
+  Segment 42: Jump of 00:00.379 (from 13:31.690 to 13:32.069)
+  Segment 43: Jump of 00:00.649 (from 13:33.968 to 13:34.617)
+  Segment 44: Jump of 00:57.939 (from 13:38.052 to 14:35.991)
+  Segment 45: Jump of 00:03.821 (from 14:40.253 to 14:44.075)
+  Segment 46: Jump of 00:31.041 (from 14:47.948 to 15:18.989)
+  Segment 47: Jump of 00:06.251 (from 15:20.669 to 15:26.920)
+  Segment 48: Jump of 00:58.730 (from 15:30.237 to 16:28.967)
+  Segment 49: Jump of 00:07.348 (from 16:31.626 to 16:38.974)
+  Segment 50: Jump of 00:07.011 (from 16:39.658 to 16:46.669)
+  Segment 51: Jump of 00:14.385 (from 16:48.653 to 17:03.038)
+  Segment 52: Jump of 00:10.926 (from 17:05.241 to 17:16.166)
+  Segment 53: Jump of 00:02.454 (from 17:18.353 to 17:20.807)
+  Segment 54: Jump of 00:06.656 (from 17:22.909 to 17:29.565)
+  Segment 55: Jump of 00:17.996 (from 17:32.393 to 17:50.389)
+  Segment 56: Jump of 00:02.167 (from 17:52.575 to 17:54.743)
+  Segment 57: Jump of 00:02.994 (from 17:58.481 to 18:01.476)
+  Segment 58: Jump of 00:30.163 (from 18:07.948 to 18:38.111)
+  Segment 59: Jump of 00:12.478 (from 18:40.483 to 18:52.961)
+  Segment 60: Jump of 00:10.166 (from 18:54.321 to 19:04.487)
+  Segment 61: Jump of 00:00.109 (from 19:08.580 to 19:08.689)
+  Segment 62: Jump of 00:03.669 (from 19:13.592 to 19:17.261)
+  Segment 63: Jump of 00:03.416 (from 19:19.718 to 19:23.134)
+  Segment 64: Jump of 00:00.126 (from 19:27.058 to 19:27.184)
+  Segment 65: Jump of 00:01.847 (from 19:36.306 to 19:38.153)
+  Segment 66: Jump of 00:09.744 (from 19:39.006 to 19:48.750)
+  Segment 67: Jump of 00:20.055 (from 19:52.320 to 20:12.375)
+  Segment 68: Jump of 00:04.055 (from 20:15.186 to 20:19.241)
+  Segment 69: Jump of 00:00.058 (from 20:21.714 to 20:21.772)
+  Segment 70: Jump of 00:02.741 (from 20:25.798 to 20:28.539)
+  Segment 71: Jump of 00:16.596 (from 20:32.008 to 20:48.603)
+  Segment 72: Jump of 00:06.487 (from 20:50.638 to 20:57.125)
+  Segment 73: Jump of 00:02.286 (from 20:59.497 to 21:01.783)
+  Segment 74: Jump of 00:00.615 (from 21:05.268 to 21:05.883)
+  Segment 75: Jump of 00:10.386 (from 21:16.591 to 21:26.977)
+  Segment 76: Jump of 00:18.604 (from 21:29.433 to 21:48.037)
+  Segment 77: Jump of 00:03.045 (from 21:56.079 to 21:59.124)
+  Segment 78: Jump of 00:04.024 (from 22:02.441 to 22:06.464)
+  Segment 79: Jump of 00:08.850 (from 22:09.511 to 22:18.361)
+  Segment 80: Jump of 00:01.071 (from 22:18.995 to 22:20.066)
+  Segment 81: Jump of 00:05.374 (from 22:29.542 to 22:34.916)
+  Segment 82: Jump of 00:08.209 (from 22:38.739 to 22:46.948)
+  Segment 83: Jump of 00:15.718 (from 22:51.429 to 23:07.147)
+  Segment 84: Jump of 00:13.845 (from 23:10.700 to 23:24.545)
+  Segment 85: Jump of 00:03.906 (from 23:26.191 to 23:30.097)
+  Average jump size: 00:14.501
+  Largest jump: 02:13.555
+
+TEMPORAL COVERAGE:
+  Original timespan covered: 00:00.000 to 23:34.443
+  Total original span: 23:34.443
+  Actual usage ratio: 34.4%

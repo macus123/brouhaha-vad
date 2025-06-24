@@ -1,0 +1,71 @@
+TIMESTAMP MAPPING FOR DEV SET
+==================================================
+
+Format: [Output Time] <- [Original Time] (Type) [Continuity]
+Times in format: MM:SS.mmm
+
+Segment  1: [00:00.000 - 02:13.555] <- [04:28.862 - 06:42.417] (SILENCE) CONTINUOUS
+Segment  2: [02:13.555 - 02:46.620] <- [06:44.687 - 07:17.753] (SILENCE) JUMP
+Segment  3: [02:46.620 - 02:47.235] <- [07:24.563 - 07:25.178] (SILENCE) JUMP
+Segment  4: [02:47.235 - 02:47.276] <- [07:25.997 - 07:26.038] (SILENCE) JUMP
+Segment  5: [02:47.276 - 03:08.057] <- [07:27.263 - 07:48.043] (SILENCE) JUMP
+Segment  6: [03:08.057 - 04:07.968] <- [07:53.453 - 08:53.364] (SILENCE) JUMP
+Segment  7: [04:07.968 - 04:48.577] <- [08:57.811 - 09:38.420] (SILENCE) JUMP
+Segment  8: [04:48.577 - 04:57.866] <- [11:54.324 - 12:03.613] (SILENCE) JUMP
+Segment  9: [04:57.866 - 04:58.377] <- [12:08.161 - 12:08.673] (SILENCE) JUMP
+Segment 10: [04:58.377 - 04:58.705] <- [12:09.475 - 12:09.803] (SILENCE) JUMP
+Segment 11: [04:58.705 - 05:30.117] <- [12:13.306 - 12:44.718] (SILENCE) JUMP
+Segment 12: [05:30.117 - 05:31.137] <- [12:49.401 - 12:50.421] (SILENCE) JUMP
+Segment 13: [05:31.137 - 05:32.984] <- [12:53.536 - 12:55.383] (SILENCE) JUMP
+Segment 14: [05:32.984 - 05:37.851] <- [13:00.758 - 13:05.626] (SILENCE) JUMP
+Segment 15: [05:37.851 - 05:41.925] <- [13:08.740 - 13:12.815] (SILENCE) JUMP
+Segment 16: [05:41.925 - 05:42.119] <- [13:13.499 - 13:13.692] (SILENCE) JUMP
+Segment 17: [05:42.119 - 05:43.544] <- [13:14.663 - 13:16.088] (SILENCE) JUMP
+Segment 18: [05:43.544 - 05:57.138] <- [23:54.886 - 24:08.480] (SPEECH ) JUMP
+Segment 19: [05:57.138 - 05:59.915] <- [25:17.757 - 25:20.534] (SPEECH ) JUMP
+Segment 20: [05:59.915 - 06:06.438] <- [25:25.688 - 25:32.211] (SPEECH ) JUMP
+Segment 21: [06:06.438 - 06:08.523] <- [26:45.844 - 26:47.929] (SPEECH ) JUMP
+Segment 22: [06:08.523 - 06:13.055] <- [27:18.447 - 27:22.979] (SPEECH ) JUMP
+Segment 23: [06:13.055 - 06:17.469] <- [27:25.939 - 27:30.353] (SPEECH ) JUMP
+Segment 24: [06:17.469 - 06:19.149] <- [27:44.232 - 27:45.912] (SPEECH ) JUMP
+Segment 25: [06:19.149 - 06:29.975] <- [27:49.311 - 28:00.138] (SPEECH ) JUMP
+
+==================================================
+CONTINUITY ANALYSIS
+==================================================
+Total segments: 25
+Continuous segments: 1
+Temporal jumps: 24
+
+JUMP DETAILS:
+  Segment 2: Jump of 00:02.271 (from 06:42.417 to 06:44.687)
+  Segment 3: Jump of 00:06.810 (from 07:17.753 to 07:24.563)
+  Segment 4: Jump of 00:00.819 (from 07:25.178 to 07:25.997)
+  Segment 5: Jump of 00:01.224 (from 07:26.038 to 07:27.263)
+  Segment 6: Jump of 00:05.409 (from 07:48.043 to 07:53.453)
+  Segment 7: Jump of 00:04.447 (from 08:53.364 to 08:57.811)
+  Segment 8: Jump of 02:15.904 (from 09:38.420 to 11:54.324)
+  Segment 9: Jump of 00:04.549 (from 12:03.613 to 12:08.161)
+  Segment 10: Jump of 00:00.803 (from 12:08.673 to 12:09.475)
+  Segment 11: Jump of 00:03.502 (from 12:09.803 to 12:13.306)
+  Segment 12: Jump of 00:04.684 (from 12:44.718 to 12:49.401)
+  Segment 13: Jump of 00:03.114 (from 12:50.421 to 12:53.536)
+  Segment 14: Jump of 00:05.376 (from 12:55.383 to 13:00.758)
+  Segment 15: Jump of 00:03.114 (from 13:05.626 to 13:08.740)
+  Segment 16: Jump of 00:00.684 (from 13:12.815 to 13:13.499)
+  Segment 17: Jump of 00:00.971 (from 13:13.692 to 13:14.663)
+  Segment 18: Jump of 10:38.798 (from 13:16.088 to 23:54.886)
+  Segment 19: Jump of 01:09.277 (from 24:08.480 to 25:17.757)
+  Segment 20: Jump of 00:05.154 (from 25:20.534 to 25:25.688)
+  Segment 21: Jump of 01:13.633 (from 25:32.211 to 26:45.844)
+  Segment 22: Jump of 00:30.517 (from 26:47.929 to 27:18.447)
+  Segment 23: Jump of 00:02.961 (from 27:22.979 to 27:25.939)
+  Segment 24: Jump of 00:13.879 (from 27:30.353 to 27:44.232)
+  Segment 25: Jump of 00:03.399 (from 27:45.912 to 27:49.311)
+  Average jump size: 00:42.554
+  Largest jump: 10:38.798
+
+TEMPORAL COVERAGE:
+  Original timespan covered: 04:28.862 to 28:00.138
+  Total original span: 23:31.276
+  Actual usage ratio: 27.6%
