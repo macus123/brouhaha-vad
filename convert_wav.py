@@ -499,3 +499,309 @@ if __name__ == "__main__":
     
     print(f"Metadata saved to: {result['metadata']}")
 
+
+"""
+Possible improvements:
+
+"""
+def batch_recompile_audio(
+    input_files: List[dict],
+    target_hours: float = 1.0,
+    speech_padding_ms: int = 200,
+    output_dir: str = "Recompiled_Output",
+    create_splits: bool = True,
+    dev_ratio: float = 0.2
+) -> Dict[str, Any]:
+    """
+    Process multiple audio files in batch and provide summary statistics.
+    
+    Args:
+        input_files: List of dicts with {'audio_path', 'ground_truth_path'} entries
+        target_hours: Target duration for each balanced output
+        speech_padding_ms: Padding to add around speech segments
+        output_dir: Directory to save output files
+        create_splits: Whether to create DEV/TRAIN splits
+        dev_ratio: Ratio of dev set size
+        
+    Returns:
+        Summary statistics for the entire batch
+    """
+    # Initialize batch statistics
+    batch_stats = {
+        "total_files": len(input_files),
+        "total_original_duration": 0,
+        "total_balanced_duration": 0,
+        "total_speech_duration": 0,
+        "total_non_speech_duration": 0,
+        "speech_ratio_accuracy": [],  # How close to 1:1 ratio we achieved
+        "continuity_stats": {
+            "total_segments": 0,
+            "continuous_segments": 0,
+            "total_sequences": 0,
+            "longest_sequence": 0,
+            "avg_sequence_length": 0
+        },
+        "file_details": []
+    }
+    
+    # Process each file
+    for i, file_info in enumerate(input_files):
+        print(f"\n[{i+1}/{len(input_files)}] Processing {file_info['audio_path']}...")
+        
+        try:
+            # Process this file
+            result = recompile_balanced_audio(
+                input_wav=file_info["audio_path"],
+                ground_truth=file_info["ground_truth_path"],
+                target_hours=target_hours,
+                speech_padding_ms=speech_padding_ms,
+                output_dir=output_dir,
+                create_splits=create_splits,
+                dev_ratio=dev_ratio
+            )
+            
+            # Extract continuity statistics from the result
+            continuity_stats = extract_continuity_stats(
+                timestamp_file=str(Path(output_dir) / "timestamp_maps" / f"{Path(file_info['audio_path']).stem}_balanced_timestamps.txt")
+            )
+            
+            # Add to batch statistics
+            batch_stats["total_original_duration"] += result["original_duration_hours"]
+            batch_stats["total_balanced_duration"] += result["balanced_duration_hours"]
+            batch_stats["total_speech_duration"] += result["balanced_speech_hours"]
+            batch_stats["total_non_speech_duration"] += result["balanced_non_speech_hours"]
+            
+            # Calculate ratio accuracy (how close to 1:1)
+            speech_ratio = result["balanced_speech_hours"] / (result["balanced_speech_hours"] + result["balanced_non_speech_hours"])
+            ratio_accuracy = min(speech_ratio, 1-speech_ratio) * 2  # 1.0 = perfect 50:50
+            batch_stats["speech_ratio_accuracy"].append(ratio_accuracy)
+            
+            # Add continuity stats
+            batch_stats["continuity_stats"]["total_segments"] += continuity_stats["total_segments"]
+            batch_stats["continuity_stats"]["continuous_segments"] += continuity_stats["continuous_segments"]
+            batch_stats["continuity_stats"]["total_sequences"] += continuity_stats["num_sequences"]
+            
+            if continuity_stats["longest_sequence"] > batch_stats["continuity_stats"]["longest_sequence"]:
+                batch_stats["continuity_stats"]["longest_sequence"] = continuity_stats["longest_sequence"]
+            
+            # Add file details
+            file_stats = {
+                "filename": Path(file_info["audio_path"]).name,
+                "original_hours": result["original_duration_hours"],
+                "balanced_hours": result["balanced_duration_hours"],
+                "speech_non_speech_ratio": f"{speech_ratio:.2f}:{1-speech_ratio:.2f}",
+                "continuous_segments": f"{continuity_stats['continuous_segments']}/{continuity_stats['total_segments']}",
+                "continuous_sequences": continuity_stats["num_sequences"],
+                "longest_sequence": continuity_stats["longest_sequence"]
+            }
+            batch_stats["file_details"].append(file_stats)
+            
+            print(f"  ✓ Processed successfully - {result['balanced_duration_hours']*60:.1f}min balanced output")
+            
+        except Exception as e:
+            print(f"  ✗ Error processing file: {e}")
+            batch_stats["file_details"].append({
+                "filename": Path(file_info["audio_path"]).name,
+                "error": str(e)
+            })
+    
+    # Calculate aggregate statistics
+    if batch_stats["continuity_stats"]["total_sequences"] > 0:
+        batch_stats["continuity_stats"]["avg_sequence_length"] = (
+            batch_stats["continuity_stats"]["continuous_segments"] / 
+            batch_stats["continuity_stats"]["total_sequences"]
+        )
+    
+    # Create batch summary file
+    create_batch_summary(batch_stats, output_dir)
+    
+    return batch_stats
+
+def analyze_continuity(timestamps):
+    """
+    Analyze continuity in a more sophisticated way by identifying sequences.
+    A sequence is a group of continuous segments without jumps.
+    """
+    sequences = []
+    current_sequence = []
+    sequence_length = 0
+    continuous_count = 0
+    
+    for i, ts in enumerate(timestamps):
+        if i == 0 or ts["is_continuous"]:
+            # Part of current continuous sequence
+            if not current_sequence:  # Start new sequence
+                current_sequence = [i]
+            else:
+                current_sequence.append(i)
+            sequence_length += 1
+            continuous_count += 1
+        else:
+            # Jump detected, end current sequence
+            if current_sequence:
+                sequences.append({
+                    "segments": current_sequence,
+                    "length": sequence_length,
+                    "start_time": timestamps[current_sequence[0]]["output_start_sec"],
+                    "end_time": timestamps[current_sequence[-1]]["output_end_sec"],
+                })
+                current_sequence = [i]  # Start new sequence with current segment
+                sequence_length = 1
+            else:
+                current_sequence = [i]
+                sequence_length = 1
+    
+    # Add the last sequence if there is one
+    if current_sequence:
+        sequences.append({
+            "segments": current_sequence,
+            "length": sequence_length,
+            "start_time": timestamps[current_sequence[0]]["output_start_sec"],
+            "end_time": timestamps[current_sequence[-1]]["output_end_sec"],
+        })
+    
+    return {
+        "sequences": sequences,
+        "num_sequences": len(sequences),
+        "longest_sequence": max([s["length"] for s in sequences]) if sequences else 0,
+        "avg_sequence_length": sum([s["length"] for s in sequences]) / len(sequences) if sequences else 0,
+        "total_segments": len(timestamps),
+        "continuous_segments": continuous_count
+    }
+
+def create_timestamp_file(timestamps, file_path, set_name):
+    """Create a detailed timestamp mapping file with improved continuity analysis."""
+    continuity_info = analyze_continuity(timestamps)
+    sequences = continuity_info["sequences"]
+    
+    with open(file_path, 'w') as f:
+        f.write(f"TIMESTAMP MAPPING FOR {set_name.upper()} SET\n")
+        f.write(f"{'='*50}\n\n")
+        
+        # Continuity summary at the top for quick reference
+        f.write(f"CONTINUITY SUMMARY:\n")
+        f.write(f"  Total segments: {len(timestamps)}\n")
+        f.write(f"  Continuous segments: {continuity_info['continuous_segments']} ({continuity_info['continuous_segments']/len(timestamps)*100:.1f}%)\n")
+        f.write(f"  Continuous sequences: {continuity_info['num_sequences']}\n")
+        f.write(f"  Longest continuous sequence: {continuity_info['longest_sequence']} segments\n")
+        f.write(f"  Average sequence length: {continuity_info['avg_sequence_length']:.1f} segments\n\n")
+        
+        # Sequence mapping for a clearer view of audio structure
+        f.write(f"CONTINUOUS SEQUENCES:\n")
+        for i, seq in enumerate(sequences):
+            duration = seq["end_time"] - seq["start_time"]
+            f.write(f"  Sequence {i+1}: {seq['length']} segments, ")
+            f.write(f"{format_time_mmss(seq['start_time'])} - {format_time_mmss(seq['end_time'])} ")
+            f.write(f"({format_time_mmss(duration)})\n")
+        f.write("\n")
+        
+        # Individual segment mapping (optional)
+        if len(timestamps) <= 50:  # Only show full mapping for smaller files
+            f.write(f"SEGMENT MAPPING:\n")
+            f.write(f"Format: [Output Time] <- [Original Time] (Type) [Continuity]\n\n")
+            
+            for i, ts in enumerate(timestamps):
+                output_start = format_time_mmss(ts["output_start_sec"])
+                output_end = format_time_mmss(ts["output_end_sec"])
+                original_start = format_time_mmss(ts["original_start_sec"])
+                original_end = format_time_mmss(ts["original_end_sec"])
+                
+                continuity = "CONTINUOUS" if ts["is_continuous"] else "JUMP"
+                type_indicator = "SPEECH" if ts["type"] == "speech" else "SILENCE"
+                
+                f.write(f"Segment {i+1:2d}: [{output_start} - {output_end}] <- ")
+                f.write(f"[{original_start} - {original_end}] ({type_indicator:7s}) {continuity}\n")
+        else:
+            f.write("SEGMENT MAPPING: Omitted (more than 50 segments)\n")
+            f.write(f"See timestamp_maps/{Path(file_path).name} for full details\n")
+
+def create_batch_summary(batch_stats, output_dir):
+    """Create a summary file for the entire batch processing job."""
+    output_path = Path(output_dir)
+    summary_file = output_path / "batch_processing_summary.txt"
+    
+    with open(summary_file, 'w') as f:
+        f.write("AUDIO RECOMPILATION - BATCH PROCESSING SUMMARY\n")
+        f.write("="*50 + "\n\n")
+        
+        # Overall statistics
+        f.write("OVERALL STATISTICS:\n")
+        f.write(f"  Files processed: {batch_stats['total_files']}\n")
+        f.write(f"  Total original duration: {batch_stats['total_original_duration']:.2f} hours\n")
+        f.write(f"  Total balanced output: {batch_stats['total_balanced_duration']:.2f} hours\n")
+        f.write(f"  Speech content: {batch_stats['total_speech_duration']:.2f} hours ")
+        speech_pct = batch_stats['total_speech_duration'] / batch_stats['total_balanced_duration'] * 100
+        f.write(f"({speech_pct:.1f}%)\n")
+        f.write(f"  Non-speech content: {batch_stats['total_non_speech_duration']:.2f} hours ")
+        nonspeech_pct = batch_stats['total_non_speech_duration'] / batch_stats['total_balanced_duration'] * 100
+        f.write(f"({nonspeech_pct:.1f}%)\n")
+        
+        # Target ratio achievement
+        avg_ratio_accuracy = sum(batch_stats['speech_ratio_accuracy']) / len(batch_stats['speech_ratio_accuracy'])
+        f.write(f"  Average 1:1 ratio accuracy: {avg_ratio_accuracy*100:.1f}% (100% = perfect)\n\n")
+        
+        # Continuity statistics
+        cont_stats = batch_stats['continuity_stats']
+        f.write("CONTINUITY STATISTICS:\n")
+        f.write(f"  Total segments: {cont_stats['total_segments']}\n")
+        f.write(f"  Continuous segments: {cont_stats['continuous_segments']} ")
+        cont_pct = cont_stats['continuous_segments'] / cont_stats['total_segments'] * 100 if cont_stats['total_segments'] > 0 else 0
+        f.write(f"({cont_pct:.1f}%)\n")
+        f.write(f"  Continuous sequences: {cont_stats['total_sequences']}\n")
+        f.write(f"  Longest continuous sequence: {cont_stats['longest_sequence']} segments\n")
+        f.write(f"  Average sequence length: {cont_stats['avg_sequence_length']:.1f} segments\n\n")
+        
+        # Per-file summary
+        f.write("PER-FILE SUMMARY:\n")
+        f.write(f"{'Filename':30} | {'Duration':9} | {'Ratio':8} | {'Continuity':15} | {'Sequences':8}\n")
+        f.write("-"*80 + "\n")
+        
+        for file_stat in batch_stats['file_details']:
+            if 'error' in file_stat:
+                f.write(f"{file_stat['filename']:30} | ERROR: {file_stat['error']}\n")
+                continue
+                
+            f.write(f"{file_stat['filename'][:30]:30} | ")
+            f.write(f"{file_stat['balanced_hours']*60:5.1f}min | ")
+            f.write(f"{file_stat['speech_non_speech_ratio']:8} | ")
+            f.write(f"{file_stat['continuous_segments']:15} | ")
+            f.write(f"{file_stat['continuous_sequences']:3} ({file_stat['longest_sequence']} max)\n")
+        
+        print(f"\nBatch processing summary saved to {summary_file}")
+
+# update recomiple balanced_audio function by adding these lines at the end of the function to include the original duration
+# Return statistics
+result = {
+    "balanced_output": str(balanced_output_path),
+    "metadata": str(metadata_path),
+    "original_duration_hours": total_duration_ms/1000/3600,  # Added this line
+    "balanced_duration_hours": len(balanced_audio)/1000/3600,
+    "balanced_speech_hours": balanced_speech_ms/1000/3600,
+    "balanced_non_speech_hours": balanced_non_speech_ms/1000/3600,
+}
+
+
+# usage example:
+# Example for batch processing
+file_list = [
+    {
+        "audio_path": "my_gt_data/audio/recording1.wav",
+        "ground_truth_path": "my_gt_data/ground_truth/recording1.txt"
+    },
+    {
+        "audio_path": "my_gt_data/audio/recording2.wav", 
+        "ground_truth_path": "my_gt_data/ground_truth/recording2.txt"
+    }
+]
+
+# Process all files and get summary
+batch_stats = batch_recompile_audio(
+    input_files=file_list,
+    target_hours=0.5,
+    speech_padding_ms=300,
+    output_dir="my_gt_data/Recompiled_Output"
+)
+
+print(f"Processed {batch_stats['total_files']} files")
+print(f"Total balanced output: {batch_stats['total_balanced_duration']:.1f} hours")
+print(f"Speech/Non-speech ratio: {batch_stats['total_speech_duration']/batch_stats['total_balanced_duration']*100:.1f}%/{batch_stats['total_non_speech_duration']/batch_stats['total_balanced_duration']*100:.1f}%")
