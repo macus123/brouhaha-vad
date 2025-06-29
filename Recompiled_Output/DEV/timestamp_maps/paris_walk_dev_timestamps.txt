@@ -1,0 +1,43 @@
+TIMESTAMP MAPPING FOR DEV SET
+==================================================
+
+Format: [Output Time] <- [Original Time] (Type) [Continuity]
+Times in format: MM:SS.mmm
+
+Segment  1: [00:00.000 - 00:00.158] <- [06:42.826 - 06:42.985] (SILENCE) CONTINUOUS
+Segment  2: [00:00.158 - 01:15.240] <- [06:45.865 - 08:00.947] (SILENCE) JUMP
+Segment  3: [01:15.240 - 01:16.409] <- [08:06.021 - 08:07.191] (SILENCE) JUMP
+Segment  4: [01:16.409 - 01:19.064] <- [08:10.274 - 08:12.928] (SILENCE) JUMP
+Segment  5: [01:19.064 - 01:19.103] <- [08:13.851 - 08:13.890] (SILENCE) JUMP
+Segment  6: [01:19.103 - 01:19.648] <- [08:14.661 - 08:15.206] (SILENCE) JUMP
+Segment  7: [01:19.648 - 03:06.781] <- [08:20.416 - 10:07.548] (SILENCE) JUMP
+Segment  8: [03:06.781 - 03:07.225] <- [10:10.817 - 10:11.261] (SILENCE) JUMP
+Segment  9: [03:07.225 - 03:08.209] <- [10:58.337 - 10:59.321] (SILENCE) JUMP
+Segment 10: [03:08.209 - 03:21.293] <- [11:02.387 - 11:15.470] (SILENCE) JUMP
+Segment 11: [03:21.293 - 03:25.753] <- [11:18.874 - 11:23.334] (SILENCE) JUMP
+
+==================================================
+CONTINUITY ANALYSIS
+==================================================
+Total segments: 11
+Continuous segments: 1
+Temporal jumps: 10
+
+JUMP DETAILS:
+  Segment 2: Jump of 00:02.881 (from 06:42.985 to 06:45.865)
+  Segment 3: Jump of 00:05.074 (from 08:00.947 to 08:06.021)
+  Segment 4: Jump of 00:03.083 (from 08:07.191 to 08:10.274)
+  Segment 5: Jump of 00:00.923 (from 08:12.928 to 08:13.851)
+  Segment 6: Jump of 00:00.771 (from 08:13.890 to 08:14.661)
+  Segment 7: Jump of 00:05.209 (from 08:15.206 to 08:20.416)
+  Segment 8: Jump of 00:03.269 (from 10:07.548 to 10:10.817)
+  Segment 9: Jump of 00:47.076 (from 10:11.261 to 10:58.337)
+  Segment 10: Jump of 00:03.066 (from 10:59.321 to 11:02.387)
+  Segment 11: Jump of 00:03.404 (from 11:15.470 to 11:18.874)
+  Average jump size: 00:07.476
+  Largest jump: 00:47.076
+
+TEMPORAL COVERAGE:
+  Original timespan covered: 06:42.826 to 11:23.334
+  Total original span: 04:40.508
+  Actual usage ratio: 73.4%

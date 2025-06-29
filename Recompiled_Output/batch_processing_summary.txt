@@ -1,0 +1,22 @@
+AUDIO RECOMPILATION - BATCH PROCESSING SUMMARY
+==================================================
+
+OVERALL STATISTICS:
+  Files processed: 1
+  Total original duration: 0.48 hours
+  Total balanced output: 0.20 hours
+  Speech content: 0.10 hours (50.0%)
+  Non-speech content: 0.10 hours (50.0%)
+  Average 1:1 ratio accuracy: 100.0% (100% = perfect)
+
+CONTINUITY STATISTICS:
+  Total segments: 105
+  Continuous segments: 0 (0.0%)
+  Continuous sequences: 89
+  Longest continuous sequence: 0 segments
+  Average sequence length: 0.0 segments
+
+PER-FILE SUMMARY:
+Filename                       | Duration  | Ratio    | Continuity      | Sequences
+--------------------------------------------------------------------------------
+paris_walk.wav                 |  12.2min | 0.50:0.50 | 0/105           |  89 (0 max)
