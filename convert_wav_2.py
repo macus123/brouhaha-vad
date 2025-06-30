@@ -897,7 +897,7 @@ def create_batch_summary(batch_stats, output_dir):
 def process_audio_directory(
     input_dir="input_data", 
     output_dir="Recompiled_Output", 
-    target_hours=1.0, 
+    target_hours=0.135, 
     speech_padding_ms=200,
     create_splits=True
 ):
@@ -937,7 +937,7 @@ if __name__ == "__main__":
     stats = process_audio_directory(
         input_dir="input_data",              # Directory with audio/ and ground_truth/ folders
         output_dir="Recompiled_Output",      # Where to save the TEST/TRAIN/DEV outputs
-        target_hours=1.0,                    # Create 1-hour balanced files 
+        target_hours=0.135,                    # Create 1-hour balanced files 
         speech_padding_ms=200,               # Add 200ms padding to speech segments
         create_splits=True                   # Create TRAIN/DEV splits from unused audio
     )
