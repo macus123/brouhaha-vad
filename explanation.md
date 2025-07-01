@@ -201,3 +201,9 @@ For each segment in chronological order:
     └── Quota full → Add to excess pile
 
 total speech ||| total silence for train, dev, and test sets, for each of the sets how many files were obtained ||| find shortest silence, concat tgt as long as it fits within the silence quota, join them together to along with adjacent speech to obtain a segment? or file? etc and then join together to obtain the test train and dev sets
+
+Reserved Silence Segments: Sets aside 40% of silence quota (configurable) specifically for interspersing
+Preference for Short Silence: Uses shorter silence segments for insertion between speech runs
+Long Speech Run Detection: Identifies runs of 3+ consecutive speech segments for silence insertion
+Intelligent Insertion: Places silence segments at strategic points throughout the audio
+Initial Silence Trimming: Limits the duration of initial silence to avoid front-loading
