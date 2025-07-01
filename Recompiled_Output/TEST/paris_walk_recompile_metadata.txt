@@ -3,42 +3,31 @@ RECOMPILATION METADATA
 
 Original file: input_data\audio\paris_walk.wav
 Ground truth: input_data\ground_truth\paris_walk.txt
-Target duration: 0.14 hours
+Target duration: 0.135 hours
 Speech padding: 200 ms
+Silence reserve ratio: 0.4
 
-Original duration: 0:29:01.380000
-Original speech: 0:06:06.753750 (21.1%)
-Original non-speech: 0:22:54.626250 (78.9%)
+Original duration: 0:40:29.806000
+Original speech: 0:06:06.753750 (15.1%)
+Original non-speech: 0:34:23.052250 (84.9%)
 
 BALANCED OUTPUT:
-================
-File: paris_walk_balanced_0.1h.wav
-Duration: 0:08:07.670000
-Speech: 0:04:04.676250 (50.2%)
-Non-speech: 0:04:03 (49.8%)
-Segments used: 71
-Continuous segments: 15/71
-Temporal jumps: 56
-Detailed timestamps: timestamp_maps/paris_walk_balanced_timestamps.txt
+Duration: 0:08:09.285000 (20.1% of original)
+Speech content: 0:04:03 (49.7%)
+Non-speech content: 0:04:06.287200 (50.3%)
+Continuous segments: 72/115
+Temporal jumps: 43
 
 DEV SET:
-========
-File: paris_walk_dev.wav
-Duration: 0:04:27.883000
-Speech: 0:00:25.810625 (9.6%)
-Non-speech: 0:04:02.072069 (90.4%)
-Segments used: 14
-Continuous segments: 1/14
-Temporal jumps: 13
-Detailed timestamps: timestamp_maps/paris_walk_dev_timestamps.txt
+Duration: 0:07:45.838000
+Speech content: 0:00:31.255000 (6.7%)
+Non-speech content: 0:07:14.583000 (93.3%)
+Continuous segments: 1/12
+Temporal jumps: 11
 
 TRAIN SET:
-==========
-File: paris_walk_train.wav
-Duration: 0:16:25.827000
-Speech: 0:01:36.266875 (9.8%)
-Non-speech: 0:14:49.554181 (50.0%)
-Segments used: 109
-Continuous segments: 57/109
-Temporal jumps: 52
-Detailed timestamps: timestamp_maps/paris_walk_train_timestamps.txt
+Duration: 0:25:11.350000
+Speech content: 0:01:36.263000 (6.4%)
+Non-speech content: 0:23:35.087000 (93.6%)
+Continuous segments: 31/69
+Temporal jumps: 38

@@ -199,3 +199,5 @@ For each segment in chronological order:
     │   ├── Yes → Include whole segment  
     │   └── No → TRIM to fit quota, add remainder to excess
     └── Quota full → Add to excess pile
+
+total speech ||| total silence for train, dev, and test sets, for each of the sets how many files were obtained ||| find shortest silence, concat tgt as long as it fits within the silence quota, join them together to along with adjacent speech to obtain a segment? or file? etc and then join together to obtain the test train and dev sets

@@ -478,8 +478,8 @@ def format_duration(ms):
 
 if __name__ == "__main__":
     result = recompile_balanced_audio(
-        input_wav="my_gt_data/audio/recording.wav",
-        ground_truth="my_gt_data/ground_truth/recording.txt",
+        input_wav="my_gt_data/audio/paris_walk.wav",
+        ground_truth="my_gt_data/ground_truth/paris_walk.txt",
         target_hours=0.1350,
         speech_padding_ms=300,
         output_dir="my_gt_data/Recompiled_Output",

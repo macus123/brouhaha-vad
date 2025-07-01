@@ -160,3 +160,7 @@ cython_debug/
 VAD_Output/
 VAD_Input/
 SNR_Results/
+
+input_data/
+Recompiled_Output/
+my_gt_data/

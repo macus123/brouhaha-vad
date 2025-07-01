@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
     # Process a longer audio file with custom parameters
     result = generate_ground_truth(
-        audio_path="data/paris_walk.wav",
+        audio_path="input_data/audio/paris_walk.wav",
         output_dir="my_gt_data",            # Custom output directory
         num_chunks=10,                      # More chunks for longer files
         verbose=True                        # Show detailed progress
