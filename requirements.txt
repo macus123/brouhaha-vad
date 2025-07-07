@@ -1,1 +1,9 @@
-pyannote.audio==3.2.0
+pydub>=0.25.0
+pathlib
+typing
+dataclasses
+csv
+datetime
+os
+shutil
+

@@ -2,17 +2,139 @@ import csv
 import datetime
 import os
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from pydub import AudioSegment
 
 from split_seg import read_ground_truth, get_non_speech_segments, save_audio_safely
-from audio_dataclasses import (
-    AudioSegmentInfo, TimestampMapping, ContinuityStats, ProcessingConfig,
-    FileProcessingInfo, ProcessingResult, SetStats, BatchStats
-)
 
+
+@dataclass
+class AudioSegmentInfo:
+    """Represents an audio segment with timing and type information."""
+    start: float  # Start time in seconds
+    end: float    # End time in seconds
+    type: str     # "speech" or "non-speech"
+    source_file: str = None  # Source file path
+    file_id: str = None      # Unique file identifier
+    duration: float = field(init=False)  # Duration in milliseconds
+    
+    def __post_init__(self):
+        self.duration = (self.end - self.start) * 1000
+
+
+@dataclass
+class TimestampMapping:
+    """Maps output timestamps to original audio timestamps."""
+    segment_index: int
+    original_start_sec: float
+    original_end_sec: float
+    output_start_sec: float
+    output_end_sec: float
+    duration_sec: float
+    type: str
+    is_continuous: bool
+    source_file: str = None  # Source file path
+    file_id: str = None      # Source file identifier
+
+
+@dataclass
+class ContinuityStats:
+    """Statistics about segment continuity."""
+    total_segments: int = 0
+    continuous_segments: int = 0
+    cross_file_transitions: int = 0
+    files_used: int = 0
+
+
+@dataclass
+class ProcessingConfig:
+    """Configuration for audio processing."""
+    target_hours: float = 1.0
+    speech_ratio: float = 0.5  # 0.5 = 50% speech, 50% silence
+    speech_padding_ms: int = 200
+    create_splits: bool = True
+    dev_ratio: float = 0.2
+    silence_reserve_ratio: float = 0.4
+    enable_multi_file_stitching: bool = True
+
+
+@dataclass
+class FileProcessingInfo:
+    """Information about a file to be processed."""
+    audio_path: str
+    ground_truth_path: str
+    set_type: str = "TEST"
+
+
+@dataclass
+class ProcessingResult:
+    """Results from processing a single audio file."""
+    balanced_output: str
+    original_duration_hours: float
+    balanced_audio: AudioSegment
+    balanced_timestamps: List[TimestampMapping]
+    balanced_speech_ms: float
+    balanced_non_speech_ms: float
+    dev_output: Optional[str] = None
+    train_output: Optional[str] = None
+    dev_audio: Optional[AudioSegment] = None
+    train_audio: Optional[AudioSegment] = None
+    dev_timestamps: List[TimestampMapping] = field(default_factory=list)
+    train_timestamps: List[TimestampMapping] = field(default_factory=list)
+    ground_truth_output: Optional[str] = None  # Ground truth file path
+    dev_ground_truth: Optional[str] = None     # Dev ground truth file path
+    train_ground_truth: Optional[str] = None   # Train ground truth file path
+    files_used: List[str] = field(default_factory=list)  # Source files used
+
+
+# @dataclass
+# class BatchStats:
+#     """Statistics for batch processing."""
+#     total_files: int = 0
+#     total_original_duration: float = 0
+#     total_balanced_duration: float = 0
+#     total_speech_duration: float = 0
+#     total_non_speech_duration: float = 0
+#     speech_ratio_accuracy: List[float] = field(default_factory=list)
+#     continuity_stats: ContinuityStats = field(default_factory=ContinuityStats)
+#     file_details: List[Dict[str, Any]] = field(default_factory=list)
+
+@dataclass
+class SetStats:
+    """Statistics for a specific set (TEST/DEV/TRAIN)."""
+    total_duration: float = 0.0
+    speech_duration: float = 0.0
+    non_speech_duration: float = 0.0
+    continuity_stats: ContinuityStats = field(default_factory=ContinuityStats)
+    file_details: List[Dict[str, Any]] = field(default_factory=list)
+
+@dataclass
+class BatchStats:
+    """Statistics for batch processing with separate tracking for each set."""
+    total_files: int = 0
+    total_original_duration: float = 0
+    speech_ratio_accuracy: List[float] = field(default_factory=list)
+    
+    # Statistics by set type
+    test_stats: SetStats = field(default_factory=SetStats)
+    dev_stats: SetStats = field(default_factory=SetStats)
+    train_stats: SetStats = field(default_factory=SetStats)
+    
+    # Map for easy access by set type
+    def stats_by_type(self, set_type: str) -> SetStats:
+        """Get statistics for a specific set type."""
+        set_type = set_type.upper()
+        if set_type == "TEST":
+            return self.test_stats
+        elif set_type == "DEV":
+            return self.dev_stats
+        elif set_type == "TRAIN":
+            return self.train_stats
+        else:
+            raise ValueError(f"Unknown set type: {set_type}")
 
 class AudioProcessor:
     """Main audio processing class with sophisticated algorithms."""
@@ -25,7 +147,7 @@ class AudioProcessor:
     def format_duration(self, ms: float) -> str:
         """Format duration in milliseconds to a readable string."""
         seconds = ms / 1000
-        return str(datetime.timedelta(seconds=int(seconds)))
+        return str(datetime.timedelta(seconds=seconds))
     
     def format_time_mmss(self, seconds: float) -> str:
         """Format seconds as MM:SS.mmm"""
@@ -577,6 +699,36 @@ class AudioProcessor:
             result.train_audio = train_audio
             result.train_timestamps = train_timestamps
     
+    def _split_remaining_segments(self, remaining_segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
+        """Split remaining segments into dev and train sets."""
+        # Calculate quotas
+        remaining_speech_ms = sum(s.duration for s in remaining_segments if s.type == "speech")
+        remaining_non_speech_ms = sum(s.duration for s in remaining_segments if s.type == "non-speech")
+        
+        dev_speech_ms = remaining_speech_ms * self.config.dev_ratio
+        dev_non_speech_ms = remaining_non_speech_ms * self.config.dev_ratio
+        
+        dev_segments = []
+        train_segments = []
+        
+        current_dev_speech_ms = 0
+        current_dev_non_speech_ms = 0
+        
+        for segment in remaining_segments:
+            is_speech = segment.type == "speech"
+            
+            if (is_speech and current_dev_speech_ms < dev_speech_ms) or \
+               (not is_speech and current_dev_non_speech_ms < dev_non_speech_ms):
+                dev_segments.append(segment)
+                if is_speech:
+                    current_dev_speech_ms += segment.duration
+                else:
+                    current_dev_non_speech_ms += segment.duration
+            else:
+                train_segments.append(segment)
+        
+        return dev_segments, train_segments
+
     def process_multiple_files(self, input_files: List[FileProcessingInfo], 
                              output_dir: str, output_name: str = "combined") -> ProcessingResult:
         """Process multiple audio files with sophisticated multi-file stitching."""
@@ -674,147 +826,6 @@ class AudioProcessor:
             result.train_timestamps = train_timestamps
             result.train_ground_truth = str(train_gt_path)
 
-    def process_unified_output(self, input_files: List[FileProcessingInfo], 
-                             test_dir: str, dev_dir: str, train_dir: str) -> ProcessingResult:
-        """Process multiple files into unified TEST/DEV/TRAIN outputs."""
-        print(f"Creating unified outputs from {len(input_files)} files...")
-        
-        # Load and analyze all files
-        all_segments, file_durations = self.load_and_analyze_multiple_files(input_files)
-        
-        # Calculate total content available
-        total_speech_ms = sum(s.duration for s in all_segments if s.type == "speech")
-        total_silence_ms = sum(s.duration for s in all_segments if s.type == "non-speech")
-        total_duration_sec = sum(file_durations.values())
-        
-        print(f"Total content available: {self.format_duration((total_speech_ms + total_silence_ms))}")
-        print(f"  Speech: {self.format_duration(total_speech_ms)}")
-        print(f"  Silence: {self.format_duration(total_silence_ms)}")
-        
-        # Create TEST set using target duration and ratio
-        test_segments = self.create_balanced_timeline_multi_file(all_segments)
-        test_audio, test_timestamps = self.compile_multi_source_audio(test_segments)
-        
-        # Calculate TEST statistics
-        test_speech_ms = sum(ts.duration_sec * 1000 for ts in test_timestamps if ts.type == "speech")
-        test_non_speech_ms = sum(ts.duration_sec * 1000 for ts in test_timestamps if ts.type == "non-speech")
-        
-        # Create TEST output files
-        test_output_path = Path(test_dir) / f"unified_test_{self.config.target_hours:.1f}h.wav"
-        test_gt_path = Path(test_dir) / f"unified_test_{self.config.target_hours:.1f}h.txt"
-        
-        save_audio_safely(test_audio, test_output_path)
-        self.create_ground_truth_file(test_timestamps, str(test_gt_path))
-        
-        print(f"TEST set created: {self.format_duration(len(test_audio))}")
-        
-        # Prepare result structure
-        result = ProcessingResult(
-            test_output=str(test_output_path),
-            test_ground_truth=str(test_gt_path),
-            original_duration_hours=total_duration_sec / 3600,
-            test_audio=test_audio,
-            test_timestamps=test_timestamps,
-            test_speech_ms=test_speech_ms,
-            test_non_speech_ms=test_non_speech_ms,
-            files_used=[file_info.audio_path for file_info in input_files]
-        )
-        
-        # Create DEV and TRAIN sets from remaining content if enabled
-        if self.config.create_splits:
-            self._create_unified_dev_train_splits(all_segments, test_segments, 
-                                                dev_dir, train_dir, result)
-        
-        return result
-    
-    def _create_unified_dev_train_splits(self, all_segments: List[AudioSegmentInfo], 
-                                       test_segments: List[AudioSegmentInfo],
-                                       dev_dir: str, train_dir: str, 
-                                       result: ProcessingResult) -> None:
-        """Create unified DEV and TRAIN sets from remaining segments."""
-        # Find remaining segments after TEST set creation
-        used_segments = set(id(segment) for segment in test_segments)
-        remaining_segments = [seg for seg in all_segments if id(seg) not in used_segments]
-        
-        # Sort by file_id and then by start time to maintain temporal order within files
-        remaining_segments.sort(key=lambda x: (x.file_id, x.start))
-        
-        if not remaining_segments:
-            print("No remaining content for DEV/TRAIN splits")
-            return
-        
-        print(f"Creating DEV/TRAIN splits from remaining {len(remaining_segments)} segments...")
-        
-        # Split remaining segments into DEV and TRAIN
-        dev_segments, train_segments = self._split_remaining_segments(remaining_segments)
-        
-        # Create DEV set
-        if dev_segments:
-            # Apply the same balanced timeline algorithm to DEV set
-            dev_balanced_segments = self._create_balanced_subset(dev_segments, "DEV")
-            dev_audio, dev_timestamps = self.compile_multi_source_audio(dev_balanced_segments)
-            
-            dev_output_path = Path(dev_dir) / "unified_dev.wav"
-            dev_gt_path = Path(dev_dir) / "unified_dev.txt"
-            
-            save_audio_safely(dev_audio, dev_output_path)
-            self.create_ground_truth_file(dev_timestamps, str(dev_gt_path))
-            
-            result.dev_output = str(dev_output_path)
-            result.dev_audio = dev_audio
-            result.dev_timestamps = dev_timestamps
-            result.dev_ground_truth = str(dev_gt_path)
-            
-            print(f"DEV set created: {self.format_duration(len(dev_audio))}")
-        
-        # Create TRAIN set
-        if train_segments:
-            # Apply the same balanced timeline algorithm to TRAIN set
-            train_balanced_segments = self._create_balanced_subset(train_segments, "TRAIN")
-            train_audio, train_timestamps = self.compile_multi_source_audio(train_balanced_segments)
-            
-            train_output_path = Path(train_dir) / "unified_train.wav"
-            train_gt_path = Path(train_dir) / "unified_train.txt"
-            
-            save_audio_safely(train_audio, train_output_path)
-            self.create_ground_truth_file(train_timestamps, str(train_gt_path))
-            
-            result.train_output = str(train_output_path)
-            result.train_audio = train_audio
-            result.train_timestamps = train_timestamps
-            result.train_ground_truth = str(train_gt_path)
-            
-            print(f"TRAIN set created: {self.format_duration(len(train_audio))}")
-    
-    def _create_balanced_subset(self, segments: List[AudioSegmentInfo], set_name: str) -> List[AudioSegmentInfo]:
-        """Create a balanced subset using the same algorithms as the main processing."""
-        speech_segments = [s for s in segments if s.type == "speech"]
-        silence_segments = [s for s in segments if s.type == "non-speech"]
-        
-        total_speech_ms = sum(s.duration for s in speech_segments)
-        total_silence_ms = sum(s.duration for s in silence_segments)
-        
-        # Use all available content, but apply balanced ratio
-        available_total_ms = total_speech_ms + total_silence_ms
-        target_speech_ms = available_total_ms * self.config.speech_ratio
-        target_silence_ms = available_total_ms * (1 - self.config.speech_ratio)
-        
-        # Adjust targets to available content
-        if total_speech_ms < target_speech_ms:
-            target_speech_ms = total_speech_ms
-            target_silence_ms = total_speech_ms * (1 - self.config.speech_ratio) / self.config.speech_ratio
-        
-        if total_silence_ms < target_silence_ms:
-            target_silence_ms = total_silence_ms
-            target_speech_ms = total_silence_ms * self.config.speech_ratio / (1 - self.config.speech_ratio)
-        
-        print(f"  {set_name} targets - Speech: {self.format_duration(target_speech_ms)}, Silence: {self.format_duration(target_silence_ms)}")
-        
-        # Apply the same sophisticated distribution algorithm
-        return self._distribute_silence_intelligently_multi_file(
-            speech_segments, silence_segments, target_speech_ms, target_silence_ms
-        )
-
 class DirectoryScanner:
     """Handles scanning of input directories for audio files."""
     
@@ -902,7 +913,7 @@ class BatchProcessor:
     
     def process_batch(self, input_files: List[FileProcessingInfo], 
                      output_dir: str) -> BatchStats:
-        """Process multiple audio files and combine into single TEST/DEV/TRAIN outputs."""
+        """Process multiple audio files in batch with multi-file stitching support."""
         # Create output directories
         output_path = Path(output_dir)
         test_dir = output_path / "TEST"
@@ -917,27 +928,49 @@ class BatchProcessor:
         # Initialize batch statistics
         self.batch_stats = BatchStats(total_files=len(input_files))
         
-        print(f"\nProcessing {len(input_files)} files into unified TEST/DEV/TRAIN sets...")
-        
-        try:
-            # Process all files together to create unified outputs
-            result = self.processor.process_unified_output(
-                input_files, str(test_dir), str(dev_dir), str(train_dir)
-            )
+        # Check if multi-file stitching is needed
+        if self.config.enable_multi_file_stitching and len(input_files) > 1:
+            # Check if any single file can meet the target
+            can_single_file_meet_target = False
+            for file_info in input_files:
+                try:
+                    # Quick check of file duration
+                    audio = AudioSegment.from_file(file_info.audio_path)
+                    duration_hours = len(audio) / 3600000
+                    if duration_hours >= self.config.target_hours:
+                        can_single_file_meet_target = True
+                        break
+                except Exception:
+                    continue
             
-            # Update batch statistics for unified processing
-            self._update_unified_batch_stats(self.batch_stats, result, input_files)
-            
-            print(f"  ✓ Unified processing completed successfully")
-            
-        except Exception as e:
-            print(f"  ✗ Error in unified processing: {e}")
-            # Create error entry
-            error_detail = {
-                "filename": "unified_processing",
-                "error": str(e)
-            }
-            self.batch_stats.test_stats.file_details.append(error_detail)
+            if not can_single_file_meet_target:
+                print(f"\nMulti-file stitching enabled: No single file can meet {self.config.target_hours} hour target")
+                print("Processing files collectively...")
+                
+                # Process all files together
+                try:
+                    result = self.processor.process_multiple_files(
+                        input_files, str(test_dir), "combined"
+                    )
+                    
+                    # Move dev/train files to appropriate directories
+                    if self.config.create_splits:
+                        self._organize_split_files(result, dev_dir, train_dir)
+                    
+                    # Update batch statistics
+                    self._update_batch_stats_multi_file(self.batch_stats, result, input_files)
+                    
+                    print(f"  ✓ Multi-file processing completed successfully")
+                    
+                except Exception as e:
+                    print(f"  ✗ Error in multi-file processing: {e}")
+                    # Fall back to individual processing
+                    return self._process_files_individually(input_files, test_dir, dev_dir, train_dir)
+            else:
+                print("Single files can meet target - processing individually")
+                return self._process_files_individually(input_files, test_dir, dev_dir, train_dir)
+        else:
+            return self._process_files_individually(input_files, test_dir, dev_dir, train_dir)
         
         # Calculate aggregate statistics
         self._finalize_batch_stats(self.batch_stats)
@@ -981,112 +1014,6 @@ class BatchProcessor:
         
         return self.batch_stats
     
-    def _update_unified_batch_stats(self, batch_stats: BatchStats, 
-                                  result: ProcessingResult, 
-                                  input_files: List[FileProcessingInfo]) -> None:
-        """Update batch statistics for unified processing."""
-        # Update original duration (sum of all input files)
-        batch_stats.total_original_duration = result.original_duration_hours
-        
-        # Process TEST set
-        self._process_unified_set_stats(
-            batch_stats.test_stats,
-            "TEST",
-            result.test_audio,
-            result.test_timestamps,
-            result.test_speech_ms,
-            result.test_non_speech_ms,
-            input_files,
-            result.original_duration_hours
-        )
-        
-        # Process DEV set if available
-        if result.dev_audio and len(result.dev_audio) > 0:
-            dev_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "speech")
-            dev_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "non-speech")
-            
-            self._process_unified_set_stats(
-                batch_stats.dev_stats,
-                "DEV",
-                result.dev_audio,
-                result.dev_timestamps,
-                dev_speech_ms,
-                dev_non_speech_ms,
-                input_files,
-                result.original_duration_hours
-            )
-        
-        # Process TRAIN set if available
-        if result.train_audio and len(result.train_audio) > 0:
-            train_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "speech")
-            train_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "non-speech")
-            
-            self._process_unified_set_stats(
-                batch_stats.train_stats,
-                "TRAIN",
-                result.train_audio,
-                result.train_timestamps,
-                train_speech_ms,
-                train_non_speech_ms,
-                input_files,
-                result.original_duration_hours
-            )
-    
-    def _process_unified_set_stats(self, set_stats: SetStats, 
-                                 set_type: str,
-                                 audio: AudioSegment,
-                                 timestamps: List[TimestampMapping],
-                                 speech_ms: float,
-                                 non_speech_ms: float,
-                                 input_files: List[FileProcessingInfo],
-                                 original_duration_hours: float) -> None:
-        """Process statistics for unified processing."""
-        duration_hours = len(audio) / 3600000
-        speech_hours = speech_ms / 3600000
-        non_speech_hours = non_speech_ms / 3600000
-        
-        # Update set totals
-        set_stats.total_duration += duration_hours
-        set_stats.speech_duration += speech_hours
-        set_stats.non_speech_duration += non_speech_hours
-        
-        # Calculate ratio accuracy (only for TEST set)
-        if set_type == "TEST" and duration_hours > 0:
-            speech_ratio = speech_hours / duration_hours
-            target_ratio = self.config.speech_ratio
-            ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
-            self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
-        
-        # Analyze continuity
-        continuity_stats = ContinuityAnalyzer.analyze_continuity(timestamps)
-        
-        # Update continuity stats
-        set_stats.continuity_stats.total_segments += continuity_stats.total_segments
-        set_stats.continuity_stats.continuous_segments += continuity_stats.continuous_segments
-        set_stats.continuity_stats.cross_file_transitions += continuity_stats.cross_file_transitions
-        set_stats.continuity_stats.files_used = continuity_stats.files_used
-        
-        # Create file details for unified processing
-        speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
-        unified_filename = f"unified_{set_type.lower()}_from_{len(input_files)}_files"
-        
-        file_stats = {
-            "filename": unified_filename,
-            "set_type": set_type,
-            "original_hours": original_duration_hours,
-            "duration_hours": duration_hours,
-            "speech_hours": speech_hours,
-            "speech_ratio": speech_ratio_val,
-            "non_speech_hours": non_speech_hours,
-            "continuous_segments": continuity_stats.continuous_segments,
-            "total_segments": continuity_stats.total_segments,
-            "cross_file_transitions": continuity_stats.cross_file_transitions,
-            "files_used": continuity_stats.files_used,
-            "source_files": [Path(f.audio_path).name for f in input_files]
-        }
-        
-        set_stats.file_details.append(file_stats)
-
     def _update_batch_stats_multi_file(self, batch_stats: BatchStats, 
                                      result: ProcessingResult, 
                                      input_files: List[FileProcessingInfo]) -> None:
@@ -1095,7 +1022,7 @@ class BatchProcessor:
         batch_stats.total_original_duration = result.original_duration_hours
         
         # Process TEST set
-        self._process_unified_set_stats(
+        self._process_set_stats_multi_file(
             batch_stats.test_stats,
             "TEST",
             result.balanced_audio,
@@ -1111,7 +1038,7 @@ class BatchProcessor:
             dev_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "speech")
             dev_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "non-speech")
             
-            self._process_unified_set_stats(
+            self._process_set_stats_multi_file(
                 batch_stats.dev_stats,
                 "DEV",
                 result.dev_audio,
@@ -1127,7 +1054,7 @@ class BatchProcessor:
             train_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "speech")
             train_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "non-speech")
             
-            self._process_unified_set_stats(
+            self._process_set_stats_multi_file(
                 batch_stats.train_stats,
                 "TRAIN",
                 result.train_audio,
@@ -1170,7 +1097,7 @@ class BatchProcessor:
         set_stats.continuity_stats.total_segments += continuity_stats.total_segments
         set_stats.continuity_stats.continuous_segments += continuity_stats.continuous_segments
         set_stats.continuity_stats.cross_file_transitions += continuity_stats.cross_file_transitions
-        set_stats.continuity_stats.files_used = max(set_stats.continuity_stats.files_used, continuity_stats.files_used)
+        set_stats.continuity_stats.files_used = continuity_stats.files_used
         
         # Create file details for multi-file processing
         speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
@@ -1347,7 +1274,7 @@ class BatchProcessor:
                     speech_hours = file_detail.get('speech_hours', 0)
                     total_hours = file_detail.get('duration_hours', 0)
                     speech_percentage = (speech_hours / total_hours) * 100 if total_hours > 0 else 0
-                    silence_hours = total_hours - speech_hours;
+                    silence_hours = total_hours - speech_hours
                     
                     writer.writerow({
                         "Filename": file_detail['filename'],
@@ -1402,7 +1329,7 @@ class AudioProcessingPipeline:
 def main():
     # Configure processing parameters
     config = ProcessingConfig(
-        target_hours=1.0,              # Target 1 hour output for TEST set
+        target_hours=1.0,              # Target 1 hour output
         speech_ratio=0.5,              # 50% speech, 50% silence (1:1 ratio)
         speech_padding_ms=200,         # 200ms padding around speech
         create_splits=True,            # Create DEV/TRAIN splits
@@ -1415,21 +1342,18 @@ def main():
     # config.speech_ratio = 0.3  # 30% speech, 70% silence
     # config.speech_ratio = 0.7  # 70% speech, 30% silence
     
-    # Load config into pipeline
+    # load config into pipeline
     pipeline = AudioProcessingPipeline(config)
     
-    # Process directory with unified output approach
+    # Process directory with multi-file stitching capability
     stats = pipeline.process_directory(
         input_dir="input_data",
         output_dir="Recompiled_Output"
     )
     
     if stats:
-        print(f"\nProcessed {stats.total_files} input files")
+        print(f"\nProcessed {stats.total_files} files")
         print(f"Total original duration: {stats.total_original_duration:.2f} hours")
-        
-        # Print unified output statistics
-        print(f"\nUNIFIED OUTPUT RESULTS:")
         print(f"TEST set duration: {stats.test_stats.total_duration:.2f} hours")
         if stats.dev_stats.total_duration > 0:
             print(f"DEV set duration: {stats.dev_stats.total_duration:.2f} hours")
@@ -1447,20 +1371,13 @@ def main():
             print(f"Cross-file transitions: {stats.test_stats.continuity_stats.cross_file_transitions}")
         
         print("\n" + "="*50)
-        print("UNIFIED PROCESSING CONFIGURATION:")
+        print("MULTI-FILE STITCHING CONFIGURATION:")
         print("="*50)
-        print(f"Target Duration (TEST): {config.target_hours} hours")
+        print(f"Target Duration: {config.target_hours} hours")
         print(f"Speech Ratio: {config.speech_ratio:.1%}")
         print(f"Silence Ratio: {(1-config.speech_ratio):.1%}")
         print(f"Multi-file Stitching: {'Enabled' if config.enable_multi_file_stitching else 'Disabled'}")
         print(f"Silence Reserve Ratio: {config.silence_reserve_ratio:.1%}")
-        print(f"Create DEV/TRAIN Splits: {'Yes' if config.create_splits else 'No'}")
-        print("="*50)
-        print("\nOUTPUT STRUCTURE:")
-        print("TEST/: Single unified test file with balanced content")
-        print("DEV/: Single unified dev file from remaining content") 
-        print("TRAIN/: Single unified train file from remaining content")
-        print("All sets include corresponding ground truth files")
         print("="*50)
 
 
