@@ -1,8 +1,3 @@
-"""
-Refactored audio processing pipeline with dataclasses and improved organization.
-Maintains all sophisticated algorithms while improving code structure.
-"""
-
 import csv
 import datetime
 import os
@@ -952,7 +947,7 @@ class BatchProcessor:
                         "LongestSequence": file_detail.get('longest_sequence', 0)
                     })
         
-        print(f"\nComprehensive batch processing summary saved to {summary_file}")
+        print(f"\nbatch processing summary saved to {summary_file}")
 
 class AudioProcessingPipeline:
     """Main pipeline class that orchestrates the entire audio processing workflow."""
@@ -988,7 +983,6 @@ class AudioProcessingPipeline:
 
 
 def main():
-    """Main function with example usage."""
     # Configure processing parameters
     config = ProcessingConfig(
         target_hours=0.135,
@@ -998,10 +992,10 @@ def main():
         silence_reserve_ratio=0.4
     )
     
-    # Create pipeline
+    # load config into pipeline
     pipeline = AudioProcessingPipeline(config)
     
-    # Process directory
+    # directory for input and output, input directory expects an audio and corresponding ground_truth folder within the input_data folder
     stats = pipeline.process_directory(
         input_dir="input_data",
         output_dir="Recompiled_Output"
@@ -1009,7 +1003,7 @@ def main():
     
     if stats:
         print(f"\nProcessed {stats.total_files} files")
-        print(f"Total output generated: {stats.total_balanced_duration:.2f} hours")
+        # print(f"Total output generated: {stats.total_balanced_duration:.2f} hours")
 
 
 if __name__ == "__main__":
