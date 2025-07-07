@@ -54,9 +54,11 @@ def _merge_overlapping_segments(self, segments):
 - Padded segments: [(9.8, 15.2), (19.8, 30.2), (39.8, 45.2)]
 - If segments overlap, they merge into continuous blocks
 
-## 2. **Sophisticated Silence Distribution Algorithm**
+## 2. **Silence Distribution Algo**
 
-This is the core innovation - distributing silence intelligently throughout the audio.
+This algo is responsible for distributing silence throughout the audio.
+Silence is reserved to prevent large continuous segments of speech and silence if either is front-loaded prematurely.
+This results in a more natural flow in the final output.
 
 ### Step 1: Reserve Silence for Interspersing
 ```python
