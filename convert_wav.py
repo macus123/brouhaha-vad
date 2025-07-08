@@ -1376,16 +1376,6 @@ class AudioProcessingPipeline:
     
     def process_directory(self, input_dir: str = "input_data", 
                          output_dir: str = "Recompiled_Output") -> Optional[BatchStats]:
-        """
-        Main entry point for processing a directory of audio files.
-        
-        Args:
-            input_dir: Input directory containing 'audio' and 'ground_truth' subdirectories
-            output_dir: Output directory for processed files
-            
-        Returns:
-            Dictionary with batch processing statistics
-        """
         # Scan input directory
         input_files = self.scanner.scan_input_directory(input_dir)
         
@@ -1424,28 +1414,5 @@ def main():
         output_dir="Recompiled_Output"
     )
     
-    if stats:
-        print(f"\nProcessed {stats.total_files} input files")
-        print(f"Total original duration: {stats.total_original_duration:.2f} hours")
-        
-        # Print unified output statistics
-        print(f"\nUNIFIED OUTPUT RESULTS:")
-        print(f"TEST set duration: {stats.test_stats.total_duration:.2f} hours")
-        if stats.dev_stats.total_duration > 0:
-            print(f"DEV set duration: {stats.dev_stats.total_duration:.2f} hours")
-        if stats.train_stats.total_duration > 0:
-            print(f"TRAIN set duration: {stats.train_stats.total_duration:.2f} hours")
-        
-        # Print speech ratio accuracy
-        if stats.speech_ratio_accuracy:
-            avg_accuracy = sum(stats.speech_ratio_accuracy) / len(stats.speech_ratio_accuracy)
-            print(f"Average speech ratio accuracy: {avg_accuracy:.2%}")
-        
-        # Print multi-file statistics
-        if stats.test_stats.continuity_stats.files_used > 1:
-            print(f"Multi-file stitching used: {stats.test_stats.continuity_stats.files_used} files")
-            print(f"Cross-file transitions: {stats.test_stats.continuity_stats.cross_file_transitions}")
-
-
 if __name__ == "__main__":
     main()
