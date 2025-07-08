@@ -1445,23 +1445,6 @@ def main():
         if stats.test_stats.continuity_stats.files_used > 1:
             print(f"Multi-file stitching used: {stats.test_stats.continuity_stats.files_used} files")
             print(f"Cross-file transitions: {stats.test_stats.continuity_stats.cross_file_transitions}")
-        
-        print("\n" + "="*50)
-        print("UNIFIED PROCESSING CONFIGURATION:")
-        print("="*50)
-        print(f"Target Duration (TEST): {config.target_hours} hours")
-        print(f"Speech Ratio: {config.speech_ratio:.1%}")
-        print(f"Silence Ratio: {(1-config.speech_ratio):.1%}")
-        print(f"Multi-file Stitching: {'Enabled' if config.enable_multi_file_stitching else 'Disabled'}")
-        print(f"Silence Reserve Ratio: {config.silence_reserve_ratio:.1%}")
-        print(f"Create DEV/TRAIN Splits: {'Yes' if config.create_splits else 'No'}")
-        print("="*50)
-        print("\nOUTPUT STRUCTURE:")
-        print("TEST/: Single unified test file with balanced content")
-        print("DEV/: Single unified dev file from remaining content") 
-        print("TRAIN/: Single unified train file from remaining content")
-        print("All sets include corresponding ground truth files")
-        print("="*50)
 
 
 if __name__ == "__main__":
