@@ -27,18 +27,9 @@ class TimestampMapping:
     output_end_sec: float
     duration_sec: float
     type: str
-    is_continuous: bool
     source_file: str = None  # Source file path
     file_id: str = None      # Source file identifier
 
-
-@dataclass
-class ContinuityStats:
-    """Statistics about segment continuity."""
-    total_segments: int = 0
-    continuous_segments: int = 0
-    cross_file_transitions: int = 0
-    files_used: int = 0
 
 
 @dataclass
@@ -88,7 +79,6 @@ class SetStats:
     total_duration: float = 0.0
     speech_duration: float = 0.0
     non_speech_duration: float = 0.0
-    continuity_stats: ContinuityStats = field(default_factory=ContinuityStats)
     file_details: List[Dict[str, Any]] = field(default_factory=list)
 
 

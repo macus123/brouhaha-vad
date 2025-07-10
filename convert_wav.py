@@ -9,7 +9,7 @@ from pydub import AudioSegment
 
 from split_seg import read_ground_truth, get_non_speech_segments, save_audio_safely
 from audio_dataclasses import (
-    AudioSegmentInfo, TimestampMapping, ContinuityStats, ProcessingConfig,
+    AudioSegmentInfo, TimestampMapping, ProcessingConfig,
     FileProcessingInfo, ProcessingResult, SetStats, BatchStats
 )
 
@@ -188,13 +188,6 @@ class AudioProcessor:
             segment_audio = source_audio[start_ms:end_ms]
             segment_duration_ms = len(segment_audio)
             
-            # Determine continuity (continuous if from same file and adjacent)
-            is_continuous = False
-            if i > 0:
-                prev_segment = segments[i-1]
-                is_continuous = (prev_segment.file_id == segment.file_id and 
-                               abs(segment.start - prev_segment.end) < 0.001)
-            
             # Create timestamp mapping
             timestamp_map.append(TimestampMapping(
                 segment_index=i,
@@ -204,7 +197,6 @@ class AudioProcessor:
                 output_end_sec=(output_time_ms + segment_duration_ms) / 1000,
                 duration_sec=segment_duration_ms / 1000,
                 type=segment.type,
-                is_continuous=is_continuous,
                 source_file=segment.source_file,
                 file_id=segment.file_id
             ))
@@ -482,9 +474,6 @@ class AudioProcessor:
                 segment_audio = self.audio[start_ms:end_ms]
                 segment_duration_ms = len(segment_audio)
                 
-                # Determine continuity
-                is_continuous = i == 0 or abs(segment.start - segments[i - 1].end) < 0.001
-                
                 timestamp_map.append(TimestampMapping(
                     segment_index=i,
                     original_start_sec=segment.start,
@@ -493,7 +482,6 @@ class AudioProcessor:
                     output_end_sec=(output_time_ms + segment_duration_ms) / 1000,
                     duration_sec=segment_duration_ms / 1000,
                     type=segment.type,
-                    is_continuous=is_continuous,
                     source_file=segment.source_file if hasattr(segment, 'source_file') else None,
                     file_id=segment.file_id if hasattr(segment, 'file_id') else None
                 ))
@@ -794,19 +782,35 @@ class AudioProcessor:
         total_speech_ms = sum(s.duration for s in speech_segments)
         total_silence_ms = sum(s.duration for s in silence_segments)
         
+        # Check if we have any content at all
+        if total_speech_ms == 0 or total_silence_ms == 0:
+            print(f"  Warning: {set_name} set has insufficient content (speech: {self.format_duration(total_speech_ms)}, silence: {self.format_duration(total_silence_ms)})")
+            # Return all segments if we don't have both types
+            return segments
+        
         # Use all available content, but apply balanced ratio
         available_total_ms = total_speech_ms + total_silence_ms
         target_speech_ms = available_total_ms * self.config.speech_ratio
         target_silence_ms = available_total_ms * (1 - self.config.speech_ratio)
         
-        # Adjust targets to available content
+        # Adjust targets based on available content while preventing zero targets
         if total_speech_ms < target_speech_ms:
+            speech_ratio = total_speech_ms / available_total_ms
             target_speech_ms = total_speech_ms
-            target_silence_ms = total_speech_ms * (1 - self.config.speech_ratio) / self.config.speech_ratio
+            # Make sure we don't exceed available silence
+            target_silence_ms = min(available_total_ms - target_speech_ms, total_silence_ms)
         
         if total_silence_ms < target_silence_ms:
+            silence_ratio = total_silence_ms / available_total_ms
             target_silence_ms = total_silence_ms
-            target_speech_ms = total_silence_ms * self.config.speech_ratio / (1 - self.config.speech_ratio)
+            # Make sure we don't exceed available speech
+            target_speech_ms = min(available_total_ms - target_silence_ms, total_speech_ms)
+        
+        # Final safeguard against zero targets
+        if target_speech_ms <= 0 or target_silence_ms <= 0:
+            print(f"  Warning: {set_name} targets too small, using all available content")
+            target_speech_ms = total_speech_ms
+            target_silence_ms = total_silence_ms
         
         print(f"  {set_name} targets - Speech: {self.format_duration(target_speech_ms)}, Silence: {self.format_duration(target_silence_ms)}")
         
@@ -814,6 +818,30 @@ class AudioProcessor:
         return self._distribute_silence_intelligently_multi_file(
             speech_segments, silence_segments, target_speech_ms, target_silence_ms
         )
+        
+    def _split_remaining_segments(self, remaining_segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
+        """Split remaining segments into DEV and TRAIN sets."""
+        if not remaining_segments:
+            return [], []
+        
+        # Calculate split point based on dev_ratio
+        total_segments = len(remaining_segments)
+        dev_count = int(total_segments * self.config.dev_ratio)
+        
+        # Ensure we have at least some segments for each set if possible
+        if dev_count == 0 and total_segments > 1:
+            dev_count = 1
+        elif dev_count == total_segments and total_segments > 1:
+            dev_count = total_segments - 1
+        
+        # Split the segments
+        dev_segments = remaining_segments[:dev_count]
+        train_segments = remaining_segments[dev_count:]
+        
+        print(f"    DEV: {len(dev_segments)} segments")
+        print(f"    TRAIN: {len(train_segments)} segments")
+        
+        return dev_segments, train_segments
 
 class DirectoryScanner:
     """Handles scanning of input directories for audio files."""
@@ -855,41 +883,6 @@ class DirectoryScanner:
         
         print(f"Matched {len(result)} files with ground truth")
         return result
-
-
-class ContinuityAnalyzer:
-    """Analyzes continuity in audio segments."""
-    
-    @staticmethod
-    def analyze_continuity(timestamps: List[TimestampMapping]) -> ContinuityStats:
-        """Analyze continuity with focus on cross-file transitions."""
-        if not timestamps:
-            return ContinuityStats()
-        
-        continuous_count = 0
-        cross_file_transitions = 0
-        files_used = set()
-        
-        for i, ts in enumerate(timestamps):
-            if ts.file_id:
-                files_used.add(ts.file_id)
-            
-            is_continuous = ts.is_continuous if i > 0 else True
-            
-            if is_continuous:
-                continuous_count += 1
-            else:
-                # Check if this is a cross-file transition
-                if i > 0 and ts.file_id and timestamps[i-1].file_id:
-                    if ts.file_id != timestamps[i-1].file_id:
-                        cross_file_transitions += 1
-        
-        return ContinuityStats(
-            total_segments=len(timestamps),
-            continuous_segments=continuous_count,
-            cross_file_transitions=cross_file_transitions,
-            files_used=len(files_used)
-        )
 
 
 class BatchProcessor:
@@ -1057,15 +1050,6 @@ class BatchProcessor:
             ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
             self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
         
-        # Analyze continuity
-        continuity_stats = ContinuityAnalyzer.analyze_continuity(timestamps)
-        
-        # Update continuity stats
-        set_stats.continuity_stats.total_segments += continuity_stats.total_segments
-        set_stats.continuity_stats.continuous_segments += continuity_stats.continuous_segments
-        set_stats.continuity_stats.cross_file_transitions += continuity_stats.cross_file_transitions
-        set_stats.continuity_stats.files_used = continuity_stats.files_used
-        
         # Create file details for unified processing
         speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
         unified_filename = f"unified_{set_type.lower()}_from_{len(input_files)}_files"
@@ -1078,10 +1062,6 @@ class BatchProcessor:
             "speech_hours": speech_hours,
             "speech_ratio": speech_ratio_val,
             "non_speech_hours": non_speech_hours,
-            "continuous_segments": continuity_stats.continuous_segments,
-            "total_segments": continuity_stats.total_segments,
-            "cross_file_transitions": continuity_stats.cross_file_transitions,
-            "files_used": continuity_stats.files_used,
             "source_files": [Path(f.audio_path).name for f in input_files]
         }
         
@@ -1163,15 +1143,6 @@ class BatchProcessor:
             ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
             self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
         
-        # Analyze continuity
-        continuity_stats = ContinuityAnalyzer.analyze_continuity(timestamps)
-        
-        # Update continuity stats
-        set_stats.continuity_stats.total_segments += continuity_stats.total_segments
-        set_stats.continuity_stats.continuous_segments += continuity_stats.continuous_segments
-        set_stats.continuity_stats.cross_file_transitions += continuity_stats.cross_file_transitions
-        set_stats.continuity_stats.files_used = max(set_stats.continuity_stats.files_used, continuity_stats.files_used)
-        
         # Create file details for multi-file processing
         speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
         combined_filename = f"combined_from_{len(input_files)}_files"
@@ -1184,10 +1155,6 @@ class BatchProcessor:
             "speech_hours": speech_hours,
             "speech_ratio": speech_ratio_val,
             "non_speech_hours": non_speech_hours,
-            "continuous_segments": continuity_stats.continuous_segments,
-            "total_segments": continuity_stats.total_segments,
-            "cross_file_transitions": continuity_stats.cross_file_transitions,
-            "files_used": continuity_stats.files_used,
             "source_files": [Path(f.audio_path).name for f in input_files]
         }
         
@@ -1284,15 +1251,6 @@ class BatchProcessor:
             ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
             self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
         
-        # Analyze continuity
-        continuity_stats = ContinuityAnalyzer.analyze_continuity(timestamps)
-        
-        # Update continuity stats
-        set_stats.continuity_stats.total_segments += continuity_stats.total_segments
-        set_stats.continuity_stats.continuous_segments += continuity_stats.continuous_segments
-        set_stats.continuity_stats.cross_file_transitions += continuity_stats.cross_file_transitions
-        set_stats.continuity_stats.files_used = max(set_stats.continuity_stats.files_used, continuity_stats.files_used)
-        
         # Create file details
         speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
         file_stats = {
@@ -1303,17 +1261,13 @@ class BatchProcessor:
             "speech_hours": speech_hours,
             "speech_ratio": speech_ratio_val,
             "non_speech_hours": non_speech_hours,
-            "continuous_segments": continuity_stats.continuous_segments,
-            "total_segments": continuity_stats.total_segments,
-            "cross_file_transitions": continuity_stats.cross_file_transitions,
-            "files_used": continuity_stats.files_used,
         }
         
         set_stats.file_details.append(file_stats)
     
     def _finalize_batch_stats(self, batch_stats: BatchStats) -> None:
         """Calculate final aggregate statistics for all sets."""
-        # No additional calculations needed for the simplified continuity stats
+        # No additional calculations needed
         pass
     
     def _create_summary_csv(self, batch_stats: BatchStats, output_dir: str) -> None:
@@ -1323,8 +1277,7 @@ class BatchProcessor:
         
         headers = [
             "Filename", "SplitType", "OriginalDuration(h)", "OutputDuration(h)",
-            "SpeechDuration(h)", "SpeechPercentage", "SilenceDuration(h)", "SilencePercentage",
-            "TotalSegments", "ContinuousSegments", "CrossFileTransitions", "FilesUsed"
+            "SpeechDuration(h)", "SpeechPercentage", "SilenceDuration(h)", "SilencePercentage"
         ]
         
         with open(summary_file, 'w', newline='') as csvfile:
@@ -1357,11 +1310,7 @@ class BatchProcessor:
                         "SpeechDuration(h)": f"{speech_hours:.4f}",
                         "SpeechPercentage": f"{speech_percentage:.2f}",
                         "SilenceDuration(h)": f"{silence_hours:.4f}",
-                        "SilencePercentage": f"{100 - speech_percentage:.2f}",
-                        "TotalSegments": file_detail.get('total_segments', 0),
-                        "ContinuousSegments": file_detail.get('continuous_segments', 0),
-                        "CrossFileTransitions": file_detail.get('cross_file_transitions', 0),
-                        "FilesUsed": file_detail.get('files_used', 0)
+                        "SilencePercentage": f"{100 - speech_percentage:.2f}"
                     })
         
         print(f"\nbatch processing summary saved to {summary_file}")
@@ -1392,7 +1341,7 @@ class AudioProcessingPipeline:
 def main():
     # Configure processing parameters
     config = ProcessingConfig(
-        target_hours=1.0,              # Target 1 hour output for TEST set
+        target_hours=0.135,              # Target X hour output for TEST set
         speech_ratio=0.5,              # 50% speech, 50% silence (1:1 ratio)
         speech_padding_ms=200,         # 200ms padding around speech
         create_splits=True,            # Create DEV/TRAIN splits
