@@ -41,7 +41,6 @@ class ProcessingConfig:
     create_splits: bool = True
     dev_ratio: float = 0.2
     silence_reserve_ratio: float = 0.4
-    enable_multi_file_stitching: bool = True
 
 
 @dataclass
