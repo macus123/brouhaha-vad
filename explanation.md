@@ -207,3 +207,117 @@ Preference for Short Silence: Uses shorter silence segments for insertion betwee
 Long Speech Run Detection: Identifies runs of 3+ consecutive speech segments for silence insertion
 Intelligent Insertion: Places silence segments at strategic points throughout the audio
 Initial Silence Trimming: Limits the duration of initial silence to avoid front-loading
+
+I'll help you implement the sample rate consistency solutions in convert_wav.py and check if split_seg.py needs modifications.
+
+## Step 1: Add Sample Rate Helper Methods to AudioProcessor 
+````
+
+````
+
+
+Made changes.
+
+## Step 2: Update save_temporal_sequences to use consistent sample rate 
+```
+
+
+Made changes.
+
+
+```
+
+```
+
+
+Made changes.
+
+
+```
+Let me fix the indentation issue and check the overall structure: I see there's an indentation issue. Let me fix it: 
+```
+
+
+Made changes.
+
+
+```
+## Step 3: Update other places that use save_audio_safely Let me update these other occurrences: 
+```
+
+
+Made changes.
+
+
+```
+
+```
+
+
+Made changes.
+
+
+```
+
+```
+
+
+Made changes.
+
+
+```
+## Step 4: Add missing import We can remove the `save_audio_safely` import since we're no longer using it directly: 
+```
+
+
+Made changes.
+
+
+```
+## Step 5: Check if split_seg.py needs modifications
+
+Looking at the split_seg.py file, I can see that the `save_audio_safely` function has a parameter `sample_rate=16000` which defaults to 16kHz. This is likely the source of your sample rate issues. However, since we're now using our own `save_audio_with_sample_rate` method in convert_wav.py, we don't need to modify split_seg.py for this specific use case.
+
+However, if you want to make split_seg.py more flexible for future use, you could: The `save_audio_safely` function in split_seg.py is fine as-is since it allows passing a custom sample rate. The issue was that we weren't passing the original sample rate when calling it.
+
+## Step 6: Test the implementation
+
+Let's run the updated code to see if the sample rate consistency fixes the duration mismatch issues: There's an issue with temporary file handling. Let me fix the `save_audio_with_sample_rate` method: 
+```
+
+
+Made changes.
+
+
+```
+Now let's test it again: Excellent! The solution worked perfectly! 🎉
+
+## Summary of Results
+
+**Before the fix:**
+- Every file had duration mismatches with a consistent ~2.76x ratio
+- Hundreds of "Fixing duration mismatch" warnings
+- WAV files were significantly longer than expected
+
+**After the fix:**
+- **No duration mismatch warnings at all!**
+- All timestamps now perfectly match the WAV file durations
+- Sample rates are preserved: 44100 Hz for TEST/DEV sequences, 48000 Hz for TRAIN sequences
+- Clean output with accurate duration reporting
+
+## What We Implemented
+
+1. **Added `get_original_sample_rate()` method** - Extracts the sample rate from cached audio files
+2. **Added `save_audio_with_sample_rate()` method** - Exports audio with explicit sample rate using ffmpeg's `-ar` parameter
+3. **Updated `save_temporal_sequences()`** - Uses the original sample rate for all exports
+4. **Updated other audio save locations** - Applied consistent sample rate handling throughout
+5. **Improved file handling** - Added proper cleanup of temporary files
+
+## Key Benefits
+
+- **Eliminated duration discrepancies** - No more 2.76x timing errors
+- **Preserved audio quality** - Original sample rates maintained
+- **Consistent behavior** - All output files use proper sample rates
+- **Future-proof** - Works correctly regardless of input file sample rates
+
+The sample rate consistency fix has completely resolved the timing mismatch issue without requiring any changes to split_seg.py. Your pipeline now produces accurate temporal sequences with perfectly synchronized ground truth files!

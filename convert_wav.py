@@ -5,12 +5,14 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from pydub import AudioSegment
 
-from split_seg import read_ground_truth, get_non_speech_segments, save_audio_safely
+from split_seg import read_ground_truth, get_non_speech_segments
 from audio_dataclasses import (
     AudioSegmentInfo, TimestampMapping, ProcessingConfig,
     FileProcessingInfo, ProcessingResult, SetStats, BatchStats
 )
 
+# audio timestamp mismatch due to change in sampling rates when exporting
+# input audio is 44.1khz, pydub converts it to the default 16khz sample rate that results in the audio being 2.76x longer
 
 class AudioProcessor:
     """Main audio processing class with sophisticated algorithms."""
@@ -162,16 +164,13 @@ class AudioProcessor:
         return all_segments, file_durations
     
     def create_ground_truth_file(self, timestamps: List[TimestampMapping], output_path: str) -> None:
-        """Create ground truth file for recompiled audio."""
-        speech_segments = [ts for ts in timestamps if ts.type == "speech"]
-        
+        """Create ground truth file for recompiled audio - include ALL segments."""
         with open(output_path, 'w') as f:
-            for ts in speech_segments:
-                # Write in the expected format: start_time \t end_time \t text
-                f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\tspeech\n")
+            for ts in timestamps:
+                # Write ALL segment types (speech AND non-speech)
+                f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\t{ts.type}\n")
     
     def compile_multi_source_audio(self, segments: List[AudioSegmentInfo]) -> Tuple[AudioSegment, List[TimestampMapping]]:
-        """Compile audio from multiple source files."""
         compiled_audio = AudioSegment.empty()
         timestamp_map = []
         output_time_ms = 0
@@ -183,10 +182,23 @@ class AudioProcessor:
             # Extract segment
             start_ms = int(segment.start * 1000)
             end_ms = int(segment.end * 1000)
+            
+            # Handle edge case where end might be slightly past file length
+            if end_ms > len(source_audio):
+                end_ms = len(source_audio)
+            
+            # Extract the actual audio
             segment_audio = source_audio[start_ms:end_ms]
             segment_duration_ms = len(segment_audio)
             
-            # Create timestamp mapping
+            # Calculate theoretical vs actual duration (for debugging)
+            theoretical_ms = (segment.end - segment.start) * 1000
+            if abs(segment_duration_ms - theoretical_ms) > 10:  # >10ms difference
+                print(f"  Note: Duration mismatch in segment {i}: "
+                    f"Expected {theoretical_ms:.1f}ms, got {segment_duration_ms:.1f}ms "
+                    f"(diff: {segment_duration_ms - theoretical_ms:.1f}ms)")
+            
+            # Create timestamp mapping using ACTUAL durations
             timestamp_map.append(TimestampMapping(
                 segment_index=i,
                 original_start_sec=segment.start,
@@ -203,8 +215,230 @@ class AudioProcessor:
             compiled_audio += segment_audio
             output_time_ms += segment_duration_ms
         
+        # Final verification - ensure the last timestamp exactly matches audio length
+        final_audio_duration_sec = len(compiled_audio) / 1000
+        if timestamp_map and abs(timestamp_map[-1].output_end_sec - final_audio_duration_sec) > 0.001:
+            # Adjust the last timestamp to match exact audio length
+            print(f"  Adjusting final timestamp: {timestamp_map[-1].output_end_sec:.3f}s → {final_audio_duration_sec:.3f}s")
+            timestamp_map[-1].output_end_sec = final_audio_duration_sec
+            timestamp_map[-1].duration_sec = timestamp_map[-1].output_end_sec - timestamp_map[-1].output_start_sec
+        
         return compiled_audio, timestamp_map
     
+    def group_segments_into_temporal_sequences(self, segments: List[AudioSegmentInfo]) -> Dict[str, List[List[AudioSegmentInfo]]]:
+        """Group segments into temporally continuous sequences by original file."""
+        # Group segments by file
+        file_segments = {}
+        for segment in segments:
+            if segment.file_id not in file_segments:
+                file_segments[segment.file_id] = []
+            file_segments[segment.file_id].append(segment)
+        
+        # For each file, sort segments by start time and group into continuous sequences
+        file_sequences = {}
+        for file_id, file_segs in file_segments.items():
+            # Sort by start time
+            file_segs.sort(key=lambda x: x.start)
+            
+            sequences = []
+            current_sequence = []
+            
+            for segment in file_segs:
+                if not current_sequence:
+                    # Start new sequence
+                    current_sequence.append(segment)
+                else:
+                    # Check if this segment is temporally continuous with the previous one
+                    prev_segment = current_sequence[-1]
+                    gap = segment.start - prev_segment.end
+                    
+                    # Consider segments continuous if gap is very small (< 0.1 seconds)
+                    if gap <= 0.1:
+                        current_sequence.append(segment)
+                    else:
+                        # Start new sequence
+                        if current_sequence:
+                            sequences.append(current_sequence)
+                        current_sequence = [segment]
+            
+            # Add the last sequence
+            if current_sequence:
+                sequences.append(current_sequence)
+            
+            file_sequences[file_id] = sequences
+        
+        return file_sequences
+    
+    def save_temporal_sequences(self, segments: List[AudioSegmentInfo], split_name: str, output_dir: str) -> List[str]:
+        sequences_by_file = self.group_segments_into_temporal_sequences(segments)
+        output_files = []
+        
+        # Get original sample rate to maintain consistency
+        original_sample_rate = self.get_original_sample_rate(segments)
+        print(f"Using sample rate: {original_sample_rate} Hz for {split_name} sequences")
+        
+        # Track quota usage for the split
+        if split_name == "TEST":
+            target_ms = int(self.config.target_hours * 3600 * 1000)
+            max_ms = int(target_ms * 1.1)  # Allow 10% overage
+            used_ms = 0
+        else:
+            target_ms = float('inf')  # No quota limits for DEV/TRAIN
+            max_ms = float('inf')
+            used_ms = 0
+        
+        for file_id, sequences in sequences_by_file.items():
+            # Get original filename for this file_id
+            original_filename = None
+            for segment in segments:
+                if segment.file_id == file_id:
+                    original_filename = Path(segment.source_file).stem
+                    break
+            
+            if not original_filename:
+                continue
+            
+            for seq_num, sequence in enumerate(sequences, 1):
+                # For TEST set, check quota limits with speech protection
+                if split_name == "TEST":
+                    sequence_duration = sum(s.duration for s in sequence)
+                    
+                    # Check if adding this sequence would exceed maximum allowed (target + 10%)
+                    if used_ms + sequence_duration > max_ms:
+                        # Check if any speech segments would be truncated
+                        truncated_sequence = self._truncate_sequence_to_quota(
+                            sequence, max_ms - used_ms, protect_speech=True)
+                        
+                        if not truncated_sequence:  # Nothing fits or would truncate speech
+                            break
+                        
+                        sequence = truncated_sequence
+                    
+                    used_ms += sum(s.duration for s in sequence)
+                
+                # Skip empty sequences (no speech or very short)
+                if not sequence or sum(s.duration for s in sequence) < 100:  # Skip sequences < 100ms
+                    continue
+                
+                # Compile audio for this sequence
+                sequence_audio, sequence_timestamps = self.compile_multi_source_audio(sequence)
+                
+                # Create output filename
+                audio_filename = f"{split_name}_{original_filename}_{seq_num:03d}.wav"
+                gt_filename = f"{split_name}_{original_filename}_{seq_num:03d}.txt"
+                
+                audio_path = Path(output_dir) / audio_filename
+                gt_path = Path(output_dir) / gt_filename
+                
+                # Save audio WITH ORIGINAL SAMPLE RATE
+                self.save_audio_with_sample_rate(sequence_audio, audio_path, original_sample_rate)
+                
+                # CRITICAL FIX: Verify the actual exported audio duration
+                exported_audio = AudioSegment.from_wav(str(audio_path))
+                exported_duration_sec = len(exported_audio) / 1000
+                
+                # Check if timestamps match actual file
+                last_timestamp = sequence_timestamps[-1].output_end_sec if sequence_timestamps else 0
+                
+                if abs(exported_duration_sec - last_timestamp) > 0.1:  # >100ms difference
+                    print(f"  Fixing duration mismatch in {audio_filename}: "
+                        f"Expected {last_timestamp:.3f}s but WAV file is {exported_duration_sec:.3f}s")
+                    
+                    # Add an extra non-speech segment to cover any gap
+                    if exported_duration_sec > last_timestamp:
+                        sequence_timestamps.append(TimestampMapping(
+                            segment_index=len(sequence_timestamps),
+                            original_start_sec=0,  # Not from original file
+                            original_end_sec=0,    # Not from original file
+                            output_start_sec=last_timestamp,
+                            output_end_sec=exported_duration_sec,
+                            duration_sec=exported_duration_sec - last_timestamp,
+                            type="non-speech",     # Extra duration is treated as silence
+                            source_file=sequence_timestamps[-1].source_file if sequence_timestamps else "",
+                            file_id=sequence_timestamps[-1].file_id if sequence_timestamps else ""
+                        ))
+                    elif exported_duration_sec < last_timestamp:
+                        # WAV file is shorter than expected - truncate the timestamps
+                        adjusted_timestamps = []
+                        current_time = 0
+                        
+                        for ts in sequence_timestamps:
+                            if current_time >= exported_duration_sec:
+                                break  # Stop when we reach the actual file duration
+                                
+                            end_time = min(ts.output_end_sec, exported_duration_sec)
+                            
+                            if end_time > current_time:  # Only include non-zero duration segments
+                                adjusted_ts = TimestampMapping(
+                                    segment_index=ts.segment_index,
+                                    original_start_sec=ts.original_start_sec,
+                                    original_end_sec=ts.original_end_sec,
+                                    output_start_sec=current_time,
+                                    output_end_sec=end_time,
+                                    duration_sec=end_time - current_time,
+                                    type=ts.type,
+                                    source_file=ts.source_file,
+                                    file_id=ts.file_id
+                                )
+                                adjusted_timestamps.append(adjusted_ts)
+                                current_time = end_time
+                        
+                        sequence_timestamps = adjusted_timestamps
+                
+                # Create ground truth file with corrected timestamps
+                self.create_ground_truth_file(sequence_timestamps, str(gt_path))
+                
+                output_files.extend([str(audio_path), str(gt_path)])
+                
+                # Log sequence info
+                duration_ms = len(exported_audio)  # Use actual exported audio duration
+                speech_ms, non_speech_ms = self._calculate_timestamp_totals(sequence_timestamps)
+                
+                print(f"  Created {audio_filename}: {self.format_duration(duration_ms)} "
+                    f"(speech: {self.format_duration(speech_ms)}, non-speech: {self.format_duration(non_speech_ms)})")
+                
+                # Stop if we've reached TEST quota target (not max overage)
+                if split_name == "TEST" and used_ms >= target_ms:
+                    print(f"  TEST quota target reached: {self.format_duration(used_ms)} (target: {self.format_duration(target_ms)})")
+                    break
+            
+            # Break outer loop too if quota target reached
+            if split_name == "TEST" and used_ms >= target_ms:
+                break
+        
+        return output_files
+
+    def _truncate_sequence_to_quota(self, sequence: List[AudioSegmentInfo], remaining_quota_ms: float, protect_speech: bool = False) -> List[AudioSegmentInfo]:
+        truncated_sequence = []
+        used_ms = 0
+        
+        for segment in sequence:
+            if used_ms + segment.duration <= remaining_quota_ms:
+                # Whole segment fits
+                truncated_sequence.append(segment)
+                used_ms += segment.duration
+            else:
+                # Segment doesn't fit completely
+                if protect_speech and segment.type == "speech":
+                    # NEVER truncate speech when protection is enabled
+                    break
+                else:
+                    # Non-speech can be truncated (or speech if protection disabled)
+                    remaining_ms = remaining_quota_ms - used_ms
+                    if remaining_ms > 100:  # Only include if at least 100ms remains
+                        # Create truncated segment
+                        truncated_segment = AudioSegmentInfo(
+                            start=segment.start,
+                            end=segment.start + (remaining_ms / 1000),
+                            type=segment.type,
+                            source_file=segment.source_file,
+                            file_id=segment.file_id
+                        )
+                        truncated_sequence.append(truncated_segment)
+                break
+        
+        return truncated_sequence
+
     def create_balanced_timeline_multi_file(self, segments: List[AudioSegmentInfo]) -> List[AudioSegmentInfo]:
         """Create balanced timeline from multiple files using the same core algorithms."""
         target_ms = int(self.config.target_hours * 3600 * 1000)
@@ -212,12 +446,10 @@ class AudioProcessor:
         silence_target_ms = target_ms * (1 - self.config.speech_ratio)
         
         # Separate speech and silence segments
-        speech_segments = [s for s in segments if s.type == "speech"]
-        silence_segments = [s for s in segments if s.type == "non-speech"]
+        speech_segments, silence_segments = self._separate_segments_by_type(segments)
         
         # Calculate totals
-        total_speech_ms = sum(s.duration for s in speech_segments)
-        total_silence_ms = sum(s.duration for s in silence_segments)
+        total_speech_ms, total_silence_ms = self._calculate_segment_totals(segments)
         
         print(f"Multi-file speech content: {self.format_duration(total_speech_ms)}")
         print(f"Multi-file non-speech content: {self.format_duration(total_silence_ms)}")
@@ -292,10 +524,13 @@ class AudioProcessor:
     def _alternate_segments_multi_file(self, speech_segments: List[AudioSegmentInfo], 
                                      silence_segments: List[AudioSegmentInfo],
                                      speech_quota: float, silence_quota: float) -> List[AudioSegmentInfo]:
-        """Multi-file version of alternating segments algorithm."""
+        """Multi-file version of alternating segments algorithm with speech priority."""
         balanced_segments = []
         speech_quota_remaining = speech_quota
         silence_quota_remaining = silence_quota
+        
+        # Allow 10% overage for preserving full speech segments
+        speech_quota_max = speech_quota * 1.1
         
         speech_index = 0
         silence_index = 0
@@ -325,32 +560,36 @@ class AudioProcessor:
         while (speech_quota_remaining > 0 or silence_quota_remaining > 0) and \
               (speech_index < len(speech_segments) or silence_index < len(silence_segments)):
             
-            add_speech = self._should_add_speech(last_type_added, speech_quota_remaining, 
-                                               silence_quota_remaining, speech_index, 
-                                               silence_index, len(speech_segments), 
-                                               len(silence_segments))
+            # Get next speech segment duration for decision making
+            next_speech_duration = speech_segments[speech_index].duration if speech_index < len(speech_segments) else 0
             
-            if add_speech:
+            add_speech = self._should_add_speech_with_priority(
+                last_type_added, speech_quota_remaining, silence_quota_remaining, 
+                speech_index, silence_index, len(speech_segments), len(silence_segments),
+                next_speech_duration, speech_quota_max
+            )
+            
+            if add_speech and speech_index < len(speech_segments):
                 segment = speech_segments[speech_index]
                 speech_index += 1
                 
-                if segment.duration <= speech_quota_remaining:
+                # NEVER truncate speech segments - only add if they fit completely
+                # Allow up to 10% overage to preserve full speech
+                if segment.duration <= speech_quota_max - (speech_quota - speech_quota_remaining):
                     balanced_segments.append(segment)
                     speech_quota_remaining -= segment.duration
+                    last_type_added = "speech"
                 else:
-                    # Split segment
-                    partial = AudioSegmentInfo(
-                        start=segment.start,
-                        end=segment.start + (speech_quota_remaining / 1000),
-                        type=segment.type,
-                        source_file=segment.source_file,
-                        file_id=segment.file_id
-                    )
-                    balanced_segments.append(partial)
-                    speech_quota_remaining = 0
-                
-                last_type_added = "speech"
-            else:
+                    # Speech doesn't fit even with overage - skip it
+                    speech_index -= 1  # Put it back for next decision
+                    # Force switch to silence if available
+                    if silence_index < len(silence_segments) and silence_quota_remaining > 0:
+                        add_speech = False
+                    else:
+                        # No silence available either - stop
+                        break
+            
+            if not add_speech and silence_index < len(silence_segments):
                 segment = silence_segments[silence_index]
                 silence_index += 1
                 
@@ -358,7 +597,7 @@ class AudioProcessor:
                     balanced_segments.append(segment)
                     silence_quota_remaining -= segment.duration
                 else:
-                    # Split segment
+                    # Silence CAN be truncated (less critical than speech)
                     partial = AudioSegmentInfo(
                         start=segment.start,
                         end=segment.start + (silence_quota_remaining / 1000),
@@ -390,6 +629,35 @@ class AudioProcessor:
             else:
                 return False
     
+    def _should_add_speech_with_priority(self, last_type: str, speech_quota: float, silence_quota: float,
+                                       speech_index: int, silence_index: int, total_speech: int, 
+                                       total_silence: int, next_speech_duration: float, speech_quota_max: float) -> bool:
+        """Determine whether to add speech or silence segment next, with speech priority and overage allowance."""
+        # Check if we have any speech segments left
+        if speech_index >= total_speech:
+            return False
+        
+        # Check if we have any silence segments left  
+        if silence_index >= total_silence:
+            return True
+        
+        # Calculate how much speech quota we've already used
+        speech_used = (speech_quota_max / 1.1) - speech_quota  # Original quota - remaining
+        
+        # If next speech segment fits within the maximum allowable quota (including 10% overage)
+        if speech_used + next_speech_duration <= speech_quota_max:
+            # Prioritize alternating pattern, but allow speech to exceed if it fits in overage
+            if last_type == "speech" and silence_quota > 0:
+                return False  # Try to alternate to silence
+            elif last_type == "non-speech" or last_type is None:
+                return True   # Add speech after silence or at start
+            else:
+                # If we can't alternate (no silence quota), add speech if it fits
+                return True
+        else:
+            # Speech segment doesn't fit even with overage allowance
+            return False
+
     def _intersperse_reserved_silence(self, balanced_segments: List[AudioSegmentInfo], 
                                     reserved_silence: List[AudioSegmentInfo]) -> List[AudioSegmentInfo]:
         """Intersperse reserved silence in long speech runs."""
@@ -455,10 +723,6 @@ class AudioProcessor:
         
         return speech_runs
     
-    def compile_audio_from_segments(self, segments: List[AudioSegmentInfo]) -> Tuple[AudioSegment, List[TimestampMapping]]:
-        """Compile audio from segments with timestamp tracking."""
-        return self.compile_multi_source_audio(segments)
-    
     def process_multiple_files(self, input_files: List[FileProcessingInfo], 
                              output_dir: str, output_name: str = "combined") -> ProcessingResult:
         """Process multiple audio files with sophisticated multi-file stitching."""
@@ -476,15 +740,15 @@ class AudioProcessor:
         balanced_audio, balanced_timestamps = self.compile_multi_source_audio(balanced_segments)
         
         # Calculate statistics
-        balanced_speech_ms = sum(ts.duration_sec * 1000 for ts in balanced_timestamps if ts.type == "speech")
-        balanced_non_speech_ms = sum(ts.duration_sec * 1000 for ts in balanced_timestamps if ts.type == "non-speech")
+        balanced_speech_ms, balanced_non_speech_ms = self._calculate_timestamp_totals(balanced_timestamps)
         
         # Create output paths
         balanced_output_path = output_path / f"{file_stem}_balanced_{self.config.target_hours:.1f}h.wav"
         gt_output_path = output_path / f"{file_stem}_balanced_{self.config.target_hours:.1f}h.txt"
         
-        # Save balanced audio
-        save_audio_safely(balanced_audio, balanced_output_path)
+        # Save balanced audio with original sample rate
+        original_sample_rate = self.get_original_sample_rate(balanced_segments)
+        self.save_audio_with_sample_rate(balanced_audio, balanced_output_path, original_sample_rate)
         
         # Create ground truth file
         self.create_ground_truth_file(balanced_timestamps, str(gt_output_path))
@@ -535,7 +799,9 @@ class AudioProcessor:
             dev_output_path = output_path / f"{file_stem}_dev.wav"
             dev_gt_path = output_path / f"{file_stem}_dev.txt"
             
-            save_audio_safely(dev_audio, dev_output_path)
+            # Save dev audio with original sample rate
+            original_sample_rate = self.get_original_sample_rate(dev_segments)
+            self.save_audio_with_sample_rate(dev_audio, dev_output_path, original_sample_rate)
             self.create_ground_truth_file(dev_timestamps, str(dev_gt_path))
             
             result.dev_output = str(dev_output_path)
@@ -548,7 +814,9 @@ class AudioProcessor:
             train_output_path = output_path / f"{file_stem}_train.wav"
             train_gt_path = output_path / f"{file_stem}_train.txt"
             
-            save_audio_safely(train_audio, train_output_path)
+            # Save train audio with original sample rate
+            original_sample_rate = self.get_original_sample_rate(train_segments)
+            self.save_audio_with_sample_rate(train_audio, train_output_path, original_sample_rate)
             self.create_ground_truth_file(train_timestamps, str(train_gt_path))
             
             result.train_output = str(train_output_path)
@@ -558,15 +826,14 @@ class AudioProcessor:
 
     def process_unified_output(self, input_files: List[FileProcessingInfo], 
                              test_dir: str, dev_dir: str, train_dir: str) -> ProcessingResult:
-        """Process multiple files into unified TEST/DEV/TRAIN outputs."""
-        print(f"Creating unified outputs from {len(input_files)} files...")
+        """Process multiple files into temporal sequences for TEST/DEV/TRAIN outputs."""
+        print(f"Creating temporal sequence outputs from {len(input_files)} files...")
         
         # Load and analyze all files
         all_segments, file_durations = self.load_and_analyze_multiple_files(input_files)
         
         # Calculate total content available
-        total_speech_ms = sum(s.duration for s in all_segments if s.type == "speech")
-        total_silence_ms = sum(s.duration for s in all_segments if s.type == "non-speech")
+        total_speech_ms, total_silence_ms = self._calculate_segment_totals(all_segments)
         total_duration_sec = sum(file_durations.values())
         
         print(f"Total content available: {self.format_duration((total_speech_ms + total_silence_ms))}")
@@ -575,28 +842,24 @@ class AudioProcessor:
         
         # Create TEST set using target duration and ratio
         test_segments = self.create_balanced_timeline_multi_file(all_segments)
-        test_audio, test_timestamps = self.compile_multi_source_audio(test_segments)
         
-        # Calculate TEST statistics
-        test_speech_ms = sum(ts.duration_sec * 1000 for ts in test_timestamps if ts.type == "speech")
-        test_non_speech_ms = sum(ts.duration_sec * 1000 for ts in test_timestamps if ts.type == "non-speech")
+        # Calculate TEST statistics for reporting
+        test_speech_ms, test_non_speech_ms = self._calculate_segment_totals(test_segments)
         
-        # Create TEST output files
-        test_output_path = Path(test_dir) / f"unified_test_{self.config.target_hours:.1f}h.wav"
-        test_gt_path = Path(test_dir) / f"unified_test_{self.config.target_hours:.1f}h.txt"
+        # Save TEST set as temporal sequences
+        print(f"Creating TEST temporal sequences...")
+        test_output_files = self.save_temporal_sequences(test_segments, "TEST", test_dir)
         
-        save_audio_safely(test_audio, test_output_path)
-        self.create_ground_truth_file(test_timestamps, str(test_gt_path))
-        
-        print(f"TEST set created: {self.format_duration(len(test_audio))}")
+        print(f"TEST set created: {self.format_duration(test_speech_ms + test_non_speech_ms)} "
+              f"across {len(test_output_files)//2} sequences")
         
         # Prepare result structure
         result = ProcessingResult(
-            test_output=str(test_output_path),
-            test_ground_truth=str(test_gt_path),
+            test_output=test_dir,  # Directory instead of single file
+            test_ground_truth=test_dir,  # Directory instead of single file
             original_duration_hours=total_duration_sec / 3600,
-            test_audio=test_audio,
-            test_timestamps=test_timestamps,
+            test_audio=None,  # No single audio file
+            test_timestamps=None,  # No single timestamp file
             test_speech_ms=test_speech_ms,
             test_non_speech_ms=test_non_speech_ms,
             files_used=[file_info.audio_path for file_info in input_files]
@@ -604,16 +867,16 @@ class AudioProcessor:
         
         # Create DEV and TRAIN sets from remaining content if enabled
         if self.config.create_splits:
-            self._create_unified_dev_train_splits(all_segments, test_segments, 
-                                                dev_dir, train_dir, result)
+            self._create_temporal_dev_train_splits(all_segments, test_segments, 
+                                                 dev_dir, train_dir, result)
         
         return result
     
-    def _create_unified_dev_train_splits(self, all_segments: List[AudioSegmentInfo], 
-                                       test_segments: List[AudioSegmentInfo],
-                                       dev_dir: str, train_dir: str, 
-                                       result: ProcessingResult) -> None:
-        """Create unified DEV and TRAIN sets from remaining segments."""
+    def _create_temporal_dev_train_splits(self, all_segments: List[AudioSegmentInfo], 
+                                         test_segments: List[AudioSegmentInfo],
+                                         dev_dir: str, train_dir: str, 
+                                         result: ProcessingResult) -> None:
+        """Create temporal sequence DEV and TRAIN sets from remaining segments."""
         # Find remaining segments after TEST set creation
         used_segments = set(id(segment) for segment in test_segments)
         remaining_segments = [seg for seg in all_segments if id(seg) not in used_segments]
@@ -634,47 +897,45 @@ class AudioProcessor:
         if dev_segments:
             # Apply the same balanced timeline algorithm to DEV set
             dev_balanced_segments = self._create_balanced_subset(dev_segments, "DEV")
-            dev_audio, dev_timestamps = self.compile_multi_source_audio(dev_balanced_segments)
             
-            dev_output_path = Path(dev_dir) / "unified_dev.wav"
-            dev_gt_path = Path(dev_dir) / "unified_dev.txt"
+            print(f"Creating DEV temporal sequences...")
+            dev_output_files = self.save_temporal_sequences(dev_balanced_segments, "DEV", dev_dir)
             
-            save_audio_safely(dev_audio, dev_output_path)
-            self.create_ground_truth_file(dev_timestamps, str(dev_gt_path))
+            dev_speech_ms = sum(s.duration for s in dev_balanced_segments if s.type == "speech")
+            dev_non_speech_ms = sum(s.duration for s in dev_balanced_segments if s.type == "non-speech")
             
-            result.dev_output = str(dev_output_path)
-            result.dev_audio = dev_audio
-            result.dev_timestamps = dev_timestamps
-            result.dev_ground_truth = str(dev_gt_path)
+            result.dev_output = dev_dir
+            result.dev_audio = None
+            result.dev_timestamps = None
+            result.dev_ground_truth = dev_dir
             
-            print(f"DEV set created: {self.format_duration(len(dev_audio))}")
+            print(f"DEV set created: {self.format_duration(dev_speech_ms + dev_non_speech_ms)} "
+                  f"across {len(dev_output_files)//2} sequences")
         
         # Create TRAIN set
         if train_segments:
             # Apply the same balanced timeline algorithm to TRAIN set
             train_balanced_segments = self._create_balanced_subset(train_segments, "TRAIN")
-            train_audio, train_timestamps = self.compile_multi_source_audio(train_balanced_segments)
             
-            train_output_path = Path(train_dir) / "unified_train.wav"
-            train_gt_path = Path(train_dir) / "unified_train.txt"
+            print(f"Creating TRAIN temporal sequences...")
+            train_output_files = self.save_temporal_sequences(train_balanced_segments, "TRAIN", train_dir)
             
-            save_audio_safely(train_audio, train_output_path)
-            self.create_ground_truth_file(train_timestamps, str(train_gt_path))
+            train_speech_ms = sum(s.duration for s in train_balanced_segments if s.type == "speech")
+            train_non_speech_ms = sum(s.duration for s in train_balanced_segments if s.type == "non-speech")
             
-            result.train_output = str(train_output_path)
-            result.train_audio = train_audio
-            result.train_timestamps = train_timestamps
-            result.train_ground_truth = str(train_gt_path)
+            result.train_output = train_dir
+            result.train_audio = None
+            result.train_timestamps = None
+            result.train_ground_truth = train_dir
             
-            print(f"TRAIN set created: {self.format_duration(len(train_audio))}")
+            print(f"TRAIN set created: {self.format_duration(train_speech_ms + train_non_speech_ms)} "
+                  f"across {len(train_output_files)//2} sequences")
     
     def _create_balanced_subset(self, segments: List[AudioSegmentInfo], set_name: str) -> List[AudioSegmentInfo]:
         """Create a balanced subset using the same algorithms as the main processing."""
-        speech_segments = [s for s in segments if s.type == "speech"]
-        silence_segments = [s for s in segments if s.type == "non-speech"]
+        speech_segments, silence_segments = self._separate_segments_by_type(segments)
         
-        total_speech_ms = sum(s.duration for s in speech_segments)
-        total_silence_ms = sum(s.duration for s in silence_segments)
+        total_speech_ms, total_silence_ms = self._calculate_segment_totals(segments)
         
         # Check if we have any content at all
         if total_speech_ms == 0 or total_silence_ms == 0:
@@ -737,6 +998,70 @@ class AudioProcessor:
         
         return dev_segments, train_segments
 
+    def get_original_sample_rate(self, segments: List[AudioSegmentInfo]) -> int:
+        """Get the sample rate from the first segment's source file."""
+        if not segments:
+            return 44100  # Default to 44.1kHz if no segments
+        
+        # Get the first segment and its file_id
+        first_segment = segments[0]
+        file_id = first_segment.file_id
+        
+        # Get the source audio from cache
+        if file_id in self.audio_cache:
+            source_audio = self.audio_cache[file_id]
+            return source_audio.frame_rate
+        
+        return 44100  # Default to 44.1kHz if not found
+    
+    def save_audio_with_sample_rate(self, audio: AudioSegment, output_path: Path, sample_rate: int) -> None:
+        """Save audio file with consistent sample rate."""
+        temp_path = output_path.with_suffix('.tmp.wav')
+        
+        try:
+            # Remove temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink()
+            
+            # Export with explicit sample rate parameter
+            audio.export(
+                str(temp_path), 
+                format="wav",
+                parameters=["-ar", str(sample_rate)]  # Set sample rate explicitly
+            )
+            
+            # Verify export worked correctly
+            if temp_path.exists() and temp_path.stat().st_size > 0:
+                # Remove target file if it exists
+                if output_path.exists():
+                    output_path.unlink()
+                temp_path.rename(output_path)
+            else:
+                raise IOError(f"Failed to export audio to {temp_path}")
+                
+        except Exception as e:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise e
+    
+    def _calculate_segment_totals(self, segments: List[AudioSegmentInfo]) -> Tuple[float, float]:
+        """Calculate total speech and non-speech durations from segments."""
+        speech_ms = sum(s.duration for s in segments if s.type == "speech")
+        non_speech_ms = sum(s.duration for s in segments if s.type == "non-speech")
+        return speech_ms, non_speech_ms
+    
+    def _calculate_timestamp_totals(self, timestamps: List[TimestampMapping]) -> Tuple[float, float]:
+        """Calculate total speech and non-speech durations from timestamps."""
+        speech_ms = sum(ts.duration_sec * 1000 for ts in timestamps if ts.type == "speech")
+        non_speech_ms = sum(ts.duration_sec * 1000 for ts in timestamps if ts.type == "non-speech")
+        return speech_ms, non_speech_ms
+
+    def _separate_segments_by_type(self, segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
+        """Separate segments into speech and non-speech lists."""
+        speech_segments = [s for s in segments if s.type == "speech"]
+        silence_segments = [s for s in segments if s.type == "non-speech"]
+        return speech_segments, silence_segments
+
 class DirectoryScanner:
     """Handles scanning of input directories for audio files."""
     
@@ -789,7 +1114,7 @@ class BatchProcessor:
     
     def process_batch(self, input_files: List[FileProcessingInfo], 
                      output_dir: str) -> BatchStats:
-        """Process multiple audio files and combine into single TEST/DEV/TRAIN outputs."""
+        """Process multiple audio files and create temporal sequence outputs for TEST/DEV/TRAIN."""
         # Create output directories
         output_path = Path(output_dir)
         test_dir = output_path / "TEST"
@@ -804,16 +1129,16 @@ class BatchProcessor:
         # Initialize batch statistics
         self.batch_stats = BatchStats(total_files=len(input_files))
         
-        print(f"\nProcessing {len(input_files)} files into unified TEST/DEV/TRAIN sets...")
+        print(f"\nProcessing {len(input_files)} files into temporal sequence TEST/DEV/TRAIN sets...")
         
         try:
-            # Process all files together to create unified outputs
+            # Process all files together to create temporal sequence outputs
             result = self.processor.process_unified_output(
                 input_files, str(test_dir), str(dev_dir), str(train_dir)
             )
             
-            # Update batch statistics for unified processing
-            self._update_unified_batch_stats(self.batch_stats, result, input_files)
+            # Update batch statistics for temporal sequence processing
+            self._update_temporal_batch_stats(self.batch_stats, result, input_files)
             
             print(f"  ✓ Processing Complete")
             
@@ -821,7 +1146,7 @@ class BatchProcessor:
             print(f"  ✗ Error in processing: {e}")
             # Create error entry
             error_detail = {
-                "filename": "unified_processing",
+                "filename": "temporal_sequence_processing",
                 "error": str(e)
             }
             self.batch_stats.test_stats.file_details.append(error_detail)
@@ -834,19 +1159,18 @@ class BatchProcessor:
         
         return self.batch_stats
     
-    def _update_unified_batch_stats(self, batch_stats: BatchStats, 
-                                  result: ProcessingResult, 
-                                  input_files: List[FileProcessingInfo]) -> None:
-        """Update batch statistics for unified processing."""
+    def _update_temporal_batch_stats(self, batch_stats: BatchStats, 
+                                    result: ProcessingResult, 
+                                    input_files: List[FileProcessingInfo]) -> None:
+        """Update batch statistics for temporal sequence processing."""
         # Update original duration (sum of all input files)
         batch_stats.total_original_duration = result.original_duration_hours
         
         # Process TEST set
-        self._process_unified_set_stats(
+        self._process_temporal_set_stats(
             batch_stats.test_stats,
             "TEST",
-            result.test_audio,
-            result.test_timestamps,
+            result.test_output,  # Directory path
             result.test_speech_ms,
             result.test_non_speech_ms,
             input_files,
@@ -854,15 +1178,14 @@ class BatchProcessor:
         )
         
         # Process DEV set if available
-        if result.dev_audio and len(result.dev_audio) > 0:
-            dev_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "speech")
-            dev_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.dev_timestamps if ts.type == "non-speech")
+        if result.dev_output:
+            # Calculate DEV statistics from directory
+            dev_speech_ms, dev_non_speech_ms = self._calculate_set_durations_from_dir(result.dev_output)
             
-            self._process_unified_set_stats(
+            self._process_temporal_set_stats(
                 batch_stats.dev_stats,
                 "DEV",
-                result.dev_audio,
-                result.dev_timestamps,
+                result.dev_output,
                 dev_speech_ms,
                 dev_non_speech_ms,
                 input_files,
@@ -870,31 +1193,59 @@ class BatchProcessor:
             )
         
         # Process TRAIN set if available
-        if result.train_audio and len(result.train_audio) > 0:
-            train_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "speech")
-            train_non_speech_ms = sum(ts.duration_sec * 1000 for ts in result.train_timestamps if ts.type == "non-speech")
+        if result.train_output:
+            # Calculate TRAIN statistics from directory
+            train_speech_ms, train_non_speech_ms = self._calculate_set_durations_from_dir(result.train_output)
             
-            self._process_unified_set_stats(
+            self._process_temporal_set_stats(
                 batch_stats.train_stats,
                 "TRAIN",
-                result.train_audio,
-                result.train_timestamps,
+                result.train_output,
                 train_speech_ms,
                 train_non_speech_ms,
                 input_files,
                 result.original_duration_hours
             )
     
-    def _process_unified_set_stats(self, set_stats: SetStats, 
-                                 set_type: str,
-                                 audio: AudioSegment,
-                                 timestamps: List[TimestampMapping],
-                                 speech_ms: float,
-                                 non_speech_ms: float,
-                                 input_files: List[FileProcessingInfo],
-                                 original_duration_hours: float) -> None:
-        """Process statistics for unified processing."""
-        duration_hours = len(audio) / 3600000
+    def _calculate_set_durations_from_dir(self, output_dir: str) -> tuple[float, float]:
+        """Calculate speech and non-speech durations from ground truth files in directory."""
+        speech_ms = 0.0
+        non_speech_ms = 0.0
+        
+        try:
+            # Find all .txt files in the directory
+            output_path = Path(output_dir)
+            for gt_file in output_path.glob("*.txt"):
+                with open(gt_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and '\t' in line:
+                            parts = line.split('\t')
+                            if len(parts) >= 3:
+                                start_time = float(parts[0])
+                                end_time = float(parts[1])
+                                label = parts[2]
+                                duration_ms = (end_time - start_time) * 1000
+                                
+                                if label == "speech":
+                                    speech_ms += duration_ms
+                                elif label == "non-speech":
+                                    non_speech_ms += duration_ms
+        except Exception as e:
+            print(f"Warning: Could not calculate durations from {output_dir}: {e}")
+        
+        return speech_ms, non_speech_ms
+    
+    def _process_temporal_set_stats(self, set_stats: SetStats, 
+                                  set_type: str,
+                                  output_dir: str,
+                                  speech_ms: float,
+                                  non_speech_ms: float,
+                                  input_files: List[FileProcessingInfo],
+                                  original_duration_hours: float) -> None:
+        """Process statistics for temporal sequence processing."""
+        total_ms = speech_ms + non_speech_ms
+        duration_hours = total_ms / 3600000
         speech_hours = speech_ms / 3600000
         non_speech_hours = non_speech_ms / 3600000
         
@@ -910,22 +1261,108 @@ class BatchProcessor:
             ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
             self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
         
-        # Create file details for unified processing
-        speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
-        unified_filename = f"unified_{set_type.lower()}_from_{len(input_files)}_files"
+        # Collect individual file details from the output directory
+        try:
+            self._collect_individual_file_details(set_stats, set_type, output_dir, input_files)
+        except Exception as e:
+            print(f"Warning: Could not collect individual file details from {output_dir}: {e}")
+            # Fallback to summary entry
+            sequence_filename = f"temporal_sequences_{set_type.lower()}_from_{len(input_files)}_files"
+            speech_ratio_val = speech_hours / duration_hours if duration_hours > 0 else 0
+            
+            file_detail = {
+                "filename": sequence_filename,
+                "set_type": set_type,
+                "output_duration_hours": duration_hours,
+                "speech_duration_hours": speech_hours,
+                "non_speech_duration_hours": non_speech_hours,
+                "speech_ratio": speech_ratio_val,
+                "original_duration_hours": original_duration_hours,
+                "reduction_factor": original_duration_hours / duration_hours if duration_hours > 0 else 0,
+                "num_sequences": 1,
+                "output_directory": output_dir,
+                "original_file": "multiple_files"
+            }
+            set_stats.file_details.append(file_detail)
+    
+    def _collect_individual_file_details(self, set_stats: SetStats, set_type: str, 
+                                        output_dir: str, input_files: List[FileProcessingInfo]) -> None:
+        """Collect details for each individual output file."""
+        output_path = Path(output_dir)
         
-        file_stats = {
-            "filename": unified_filename,
-            "set_type": set_type,
-            "original_hours": original_duration_hours,
-            "duration_hours": duration_hours,
-            "speech_hours": speech_hours,
-            "speech_ratio": speech_ratio_val,
-            "non_speech_hours": non_speech_hours,
-            "source_files": [Path(f.audio_path).name for f in input_files]
-        }
+        # Create mapping from original filenames to their full paths
+        original_file_map = {}
+        for file_info in input_files:
+            original_name = Path(file_info.audio_path).stem
+            original_file_map[original_name] = file_info.audio_path
         
-        set_stats.file_details.append(file_stats)
+        # Process each audio file in the output directory
+        for audio_file in output_path.glob("*.wav"):
+            try:
+                # Parse filename: {SPLIT}_{original_filename}_{sequence_number}.wav
+                filename_parts = audio_file.stem.split('_')
+                if len(filename_parts) >= 3:
+                    split_name = filename_parts[0]
+                    sequence_num = filename_parts[-1]
+                    original_filename = '_'.join(filename_parts[1:-1])  # Handle filenames with underscores
+                else:
+                    continue  # Skip malformed filenames
+                
+                # Find corresponding ground truth file
+                gt_file = output_path / f"{audio_file.stem}.txt"
+                if not gt_file.exists():
+                    continue
+                
+                # Calculate durations from ground truth file
+                speech_duration_sec = 0.0
+                non_speech_duration_sec = 0.0
+                
+                with open(gt_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            start_sec = float(parts[0])
+                            end_sec = float(parts[1])
+                            segment_type = parts[2]
+                            duration = end_sec - start_sec
+                            
+                            if segment_type == "speech":
+                                speech_duration_sec += duration
+                            else:
+                                non_speech_duration_sec += duration
+                
+                total_duration_sec = speech_duration_sec + non_speech_duration_sec
+                speech_hours = speech_duration_sec / 3600
+                non_speech_hours = non_speech_duration_sec / 3600
+                total_hours = total_duration_sec / 3600
+                
+                speech_percentage = (speech_hours / total_hours) * 100 if total_hours > 0 else 0
+                
+                # Get original file path
+                original_file_path = original_file_map.get(original_filename, f"Unknown ({original_filename})")
+                
+                file_detail = {
+                    "filename": audio_file.name,
+                    "set_type": set_type,
+                    "output_duration_hours": total_hours,
+                    "speech_duration_hours": speech_hours,
+                    "non_speech_duration_hours": non_speech_hours,
+                    "speech_ratio": speech_percentage / 100 if total_hours > 0 else 0,
+                    "original_duration_hours": 0,  # Will be filled later if needed
+                    "reduction_factor": 0,  # Will be calculated later if needed
+                    "num_sequences": 1,  # Each entry represents one sequence
+                    "output_directory": output_dir,
+                    "original_file": original_file_path,
+                    "sequence_number": sequence_num
+                }
+                set_stats.file_details.append(file_detail)
+                
+            except Exception as e:
+                print(f"Warning: Could not process file {audio_file}: {e}")
+                continue
 
     def _finalize_batch_stats(self, batch_stats: BatchStats) -> None:
         """Calculate final aggregate statistics for all sets."""
@@ -933,13 +1370,14 @@ class BatchProcessor:
         pass
     
     def _create_summary_csv(self, batch_stats: BatchStats, output_dir: str) -> None:
-        """Create a CSV summary file that includes all sets."""
+        """Create a CSV summary file that includes all individual output files."""
         output_path = Path(output_dir)
         summary_file = output_path / "batch_processing_summary.csv"
         
         headers = [
-            "Filename", "SplitType", "OriginalDuration(h)", "OutputDuration(h)",
-            "SpeechDuration(h)", "SpeechPercentage", "SilenceDuration(h)", "SilencePercentage"
+            "Filename", "SplitType", "OriginalFile", "SequenceNumber", "OutputDuration(h)",
+            "SpeechDuration(h)", "SpeechPercentage", "SilenceDuration(h)", "SilencePercentage",
+            "OutputDirectory"
         ]
         
         with open(summary_file, 'w', newline='') as csvfile:
@@ -949,7 +1387,18 @@ class BatchProcessor:
             # Write error entries
             error_files = [fd for fd in batch_stats.test_stats.file_details if 'error' in fd]
             for file_detail in error_files:
-                writer.writerow({"Filename": file_detail['filename'], "SplitType": "ERROR"})
+                writer.writerow({
+                    "Filename": file_detail['filename'], 
+                    "SplitType": "ERROR",
+                    "OriginalFile": "",
+                    "SequenceNumber": "",
+                    "OutputDuration(h)": "",
+                    "SpeechDuration(h)": "",
+                    "SpeechPercentage": "",
+                    "SilenceDuration(h)": "",
+                    "SilencePercentage": "",
+                    "OutputDirectory": ""
+                })
             
             # Process each set type
             for set_type in ["TEST", "DEV", "TRAIN"]:
@@ -959,23 +1408,44 @@ class BatchProcessor:
                     if 'error' in file_detail:
                         continue  # Already processed errors
                     
-                    speech_hours = file_detail.get('speech_hours', 0)
-                    total_hours = file_detail.get('duration_hours', 0)
+                    speech_hours = file_detail.get('speech_duration_hours', 0)
+                    total_hours = file_detail.get('output_duration_hours', 0)
                     speech_percentage = (speech_hours / total_hours) * 100 if total_hours > 0 else 0
-                    silence_hours = total_hours - speech_hours;
+                    silence_hours = total_hours - speech_hours
+                    
+                    # Get original file name for display
+                    original_file = file_detail.get('original_file', '')
+                    if original_file and original_file != "multiple_files":
+                        original_file_name = Path(original_file).name
+                    else:
+                        original_file_name = original_file
                     
                     writer.writerow({
                         "Filename": file_detail['filename'],
                         "SplitType": set_type,
-                        "OriginalDuration(h)": f"{file_detail.get('original_hours', 0):.4f}",
+                        "OriginalFile": original_file_name,
+                        "SequenceNumber": file_detail.get('sequence_number', ''),
                         "OutputDuration(h)": f"{total_hours:.4f}",
                         "SpeechDuration(h)": f"{speech_hours:.4f}",
                         "SpeechPercentage": f"{speech_percentage:.2f}",
                         "SilenceDuration(h)": f"{silence_hours:.4f}",
-                        "SilencePercentage": f"{100 - speech_percentage:.2f}"
+                        "SilencePercentage": f"{100 - speech_percentage:.2f}",
+                        "OutputDirectory": file_detail.get('output_directory', '')
                     })
         
-        print(f"\nbatch processing summary saved to {summary_file}")
+        print(f"\nBatch processing summary saved to {summary_file}")
+        print(f"Temporal sequences created in subdirectories: TEST/, DEV/, TRAIN/")
+        
+        # Print summary statistics
+        total_files = 0
+        for set_type in ["TEST", "DEV", "TRAIN"]:
+            set_stats = batch_stats.stats_by_type(set_type)
+            count = len([fd for fd in set_stats.file_details if 'error' not in fd])
+            if count > 0:
+                print(f"  {set_type}: {count} sequence files")
+                total_files += count
+        
+        print(f"  Total: {total_files} sequence files recorded in CSV")
 
 class AudioProcessingPipeline:
     """Main pipeline class that orchestrates the entire audio processing workflow."""
@@ -1018,7 +1488,7 @@ def main():
     # Load config into pipeline
     pipeline = AudioProcessingPipeline(config)
     
-    # Process directory with unified output approach
+    # Process directory with temporal sequence output approach
     stats = pipeline.process_directory(
         input_dir="input_data",
         output_dir="Recompiled_Output"

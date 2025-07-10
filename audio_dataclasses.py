@@ -54,21 +54,21 @@ class FileProcessingInfo:
 @dataclass
 class ProcessingResult:
     """Results from processing audio files."""
-    test_output: str
-    test_ground_truth: str
+    test_output: str  # Now directory path instead of single file
+    test_ground_truth: str  # Now directory path instead of single file
     original_duration_hours: float
-    test_audio: AudioSegment
-    test_timestamps: List[TimestampMapping]
-    test_speech_ms: float
-    test_non_speech_ms: float
-    dev_output: Optional[str] = None
-    train_output: Optional[str] = None
-    dev_audio: Optional[AudioSegment] = None
-    train_audio: Optional[AudioSegment] = None
-    dev_timestamps: List[TimestampMapping] = field(default_factory=list)
-    train_timestamps: List[TimestampMapping] = field(default_factory=list)
-    dev_ground_truth: Optional[str] = None     # Dev ground truth file path
-    train_ground_truth: Optional[str] = None   # Train ground truth file path
+    test_audio: Optional[AudioSegment] = None  # None for temporal sequence output
+    test_timestamps: Optional[List[TimestampMapping]] = None  # None for temporal sequence output
+    test_speech_ms: float = 0.0
+    test_non_speech_ms: float = 0.0
+    dev_output: Optional[str] = None  # Directory path for temporal sequences
+    train_output: Optional[str] = None  # Directory path for temporal sequences
+    dev_audio: Optional[AudioSegment] = None  # None for temporal sequence output
+    train_audio: Optional[AudioSegment] = None  # None for temporal sequence output
+    dev_timestamps: Optional[List[TimestampMapping]] = None  # None for temporal sequence output
+    train_timestamps: Optional[List[TimestampMapping]] = None  # None for temporal sequence output
+    dev_ground_truth: Optional[str] = None     # Dev ground truth directory path
+    train_ground_truth: Optional[str] = None   # Train ground truth directory path
     files_used: List[str] = field(default_factory=list)  # Source files used
 
 
