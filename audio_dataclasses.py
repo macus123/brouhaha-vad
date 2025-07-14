@@ -41,6 +41,7 @@ class ProcessingConfig:
     create_splits: bool = True
     dev_ratio: float = 0.2
     silence_reserve_ratio: float = 0.4
+    default_sample_rate: int = 44100  # Default sample rate in Hz
 
 
 @dataclass

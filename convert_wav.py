@@ -11,9 +11,6 @@ from audio_dataclasses import (
     FileProcessingInfo, ProcessingResult, SetStats, BatchStats
 )
 
-# audio timestamp mismatch due to change in sampling rates when exporting
-# input audio is 44.1khz, pydub converts it to the default 16khz sample rate that results in the audio being 2.76x longer
-
 class AudioProcessor:
     """Main audio processing class with sophisticated algorithms."""
     
@@ -26,60 +23,6 @@ class AudioProcessor:
         """Format duration in milliseconds to a readable string."""
         seconds = ms / 1000
         return str(datetime.timedelta(seconds=int(seconds)))
-    
-    def format_time_mmss(self, seconds: float) -> str:
-        """Format seconds as MM:SS.mmm"""
-        minutes = int(seconds // 60)
-        secs = seconds % 60
-        return f"{minutes:02d}:{secs:06.3f}"
-    
-    def load_and_analyze_audio(self, input_wav: str, ground_truth: str) -> Tuple[List[AudioSegmentInfo], float]:
-        """Load audio file and analyze speech/non-speech segments."""
-        file_stem = Path(input_wav).stem
-        
-        # Auto-detect ground truth if not provided
-        if ground_truth is None:
-            input_path = Path(input_wav)
-            potential_gt = Path(input_path.parent.parent, "ground_truth", f"{input_path.stem}.txt")
-            if potential_gt.exists():
-                ground_truth = str(potential_gt)
-            else:
-                raise ValueError(f"Ground truth file not provided and could not be auto-detected for {input_wav}")
-        
-        # Load audio and get duration
-        print(f"Processing file: {input_wav}")
-        print(f"Target: {self.config.target_hours} hours with 1:1 speech/non-speech ratio")
-        
-        self.audio = AudioSegment.from_file(input_wav)
-        total_duration_ms = len(self.audio)
-        total_duration_sec = total_duration_ms / 1000
-        
-        print(f"Original audio: {self.format_duration(total_duration_ms)}")
-        
-        # Read ground truth and get speech segments
-        speech_segments = read_ground_truth(ground_truth)
-        non_speech_segments = get_non_speech_segments(speech_segments, total_duration_sec)
-        
-        # Create AudioSegmentInfo objects
-        all_segments = []
-        
-        # Add speech segments with padding
-        padded_speech_segments = self._add_padding_to_speech(speech_segments, total_duration_sec)
-        merged_speech_segments = self._merge_overlapping_segments(padded_speech_segments)
-        
-        for start, end in merged_speech_segments:
-            all_segments.append(AudioSegmentInfo(start=start, end=end, type="speech"))
-        
-        # Recalculate non-speech segments based on merged speech segments
-        merged_non_speech_segments = get_non_speech_segments(merged_speech_segments, total_duration_sec)
-        
-        for start, end in merged_non_speech_segments:
-            all_segments.append(AudioSegmentInfo(start=start, end=end, type="non-speech"))
-        
-        # Sort by start time
-        all_segments.sort(key=lambda x: x.start)
-        
-        return all_segments, total_duration_sec
     
     def _add_padding_to_speech(self, speech_segments: List[Tuple[float, float]], total_duration_sec: float) -> List[Tuple[float, float]]:
         """Add padding to speech segments."""
@@ -164,11 +107,26 @@ class AudioProcessor:
         return all_segments, file_durations
     
     def create_ground_truth_file(self, timestamps: List[TimestampMapping], output_path: str) -> None:
-        """Create ground truth file for recompiled audio - include ALL segments."""
+        """Create ground truth file for recompiled audio - only include speech segments."""
         with open(output_path, 'w') as f:
-            for ts in timestamps:
-                # Write ALL segment types (speech AND non-speech)
-                f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\t{ts.type}\n")
+            # Filter for speech segments only
+            speech_timestamps = [ts for ts in timestamps if ts.type == "speech"]
+            
+            if speech_timestamps:
+                # Write only speech segments
+                for ts in speech_timestamps:
+                    f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\tspeech\n")
+            else:
+                # No speech segments - write entire file duration with filename
+                if timestamps:
+                    # Get total duration from the last timestamp
+                    total_duration = timestamps[-1].output_end_sec
+                    wav_filename = Path(output_path).stem + ".wav"
+                    f.write(f"0.000\t{total_duration:.3f}\t{wav_filename}\n")
+                else:
+                    # Fallback: empty file case
+                    wav_filename = Path(output_path).stem + ".wav"
+                    f.write(f"0.000\t0.000\t{wav_filename}\n")
     
     def compile_multi_source_audio(self, segments: List[AudioSegmentInfo]) -> Tuple[AudioSegment, List[TimestampMapping]]:
         compiled_audio = AudioSegment.empty()
@@ -273,10 +231,6 @@ class AudioProcessor:
         sequences_by_file = self.group_segments_into_temporal_sequences(segments)
         output_files = []
         
-        # Get original sample rate to maintain consistency
-        original_sample_rate = self.get_original_sample_rate(segments)
-        print(f"Using sample rate: {original_sample_rate} Hz for {split_name} sequences")
-        
         # Track quota usage for the split
         if split_name == "TEST":
             target_ms = int(self.config.target_hours * 3600 * 1000)
@@ -288,14 +242,16 @@ class AudioProcessor:
             used_ms = 0
         
         for file_id, sequences in sequences_by_file.items():
-            # Get original filename for this file_id
+            # Get original filename and file path for this file_id
             original_filename = None
+            source_file_path = None
             for segment in segments:
                 if segment.file_id == file_id:
                     original_filename = Path(segment.source_file).stem
+                    source_file_path = segment.source_file
                     break
             
-            if not original_filename:
+            if not original_filename or not source_file_path:
                 continue
             
             for seq_num, sequence in enumerate(sequences, 1):
@@ -330,8 +286,8 @@ class AudioProcessor:
                 audio_path = Path(output_dir) / audio_filename
                 gt_path = Path(output_dir) / gt_filename
                 
-                # Save audio WITH ORIGINAL SAMPLE RATE
-                self.save_audio_with_sample_rate(sequence_audio, audio_path, original_sample_rate)
+                # Save audio with original sample rate
+                self.save_audio_with_original_sample_rate(sequence_audio, audio_path, source_file_path)
                 
                 # CRITICAL FIX: Verify the actual exported audio duration
                 exported_audio = AudioSegment.from_wav(str(audio_path))
@@ -392,7 +348,7 @@ class AudioProcessor:
                 
                 # Log sequence info
                 duration_ms = len(exported_audio)  # Use actual exported audio duration
-                speech_ms, non_speech_ms = self._calculate_timestamp_totals(sequence_timestamps)
+                speech_ms, non_speech_ms = self._calculate_totals(sequence_timestamps)
                 
                 print(f"  Created {audio_filename}: {self.format_duration(duration_ms)} "
                     f"(speech: {self.format_duration(speech_ms)}, non-speech: {self.format_duration(non_speech_ms)})")
@@ -449,7 +405,7 @@ class AudioProcessor:
         speech_segments, silence_segments = self._separate_segments_by_type(segments)
         
         # Calculate totals
-        total_speech_ms, total_silence_ms = self._calculate_segment_totals(segments)
+        total_speech_ms, total_silence_ms = self._calculate_totals(segments)
         
         print(f"Multi-file speech content: {self.format_duration(total_speech_ms)}")
         print(f"Multi-file non-speech content: {self.format_duration(total_silence_ms)}")
@@ -740,15 +696,19 @@ class AudioProcessor:
         balanced_audio, balanced_timestamps = self.compile_multi_source_audio(balanced_segments)
         
         # Calculate statistics
-        balanced_speech_ms, balanced_non_speech_ms = self._calculate_timestamp_totals(balanced_timestamps)
+        balanced_speech_ms, balanced_non_speech_ms = self._calculate_totals(balanced_timestamps)
         
         # Create output paths
         balanced_output_path = output_path / f"{file_stem}_balanced_{self.config.target_hours:.1f}h.wav"
         gt_output_path = output_path / f"{file_stem}_balanced_{self.config.target_hours:.1f}h.txt"
         
-        # Save balanced audio with original sample rate
-        original_sample_rate = self.get_original_sample_rate(balanced_segments)
-        self.save_audio_with_sample_rate(balanced_audio, balanced_output_path, original_sample_rate)
+        # Save balanced audio with original sample rate from first file
+        first_source_file = input_files[0].audio_path if input_files else None
+        if first_source_file:
+            self.save_audio_with_original_sample_rate(balanced_audio, balanced_output_path, first_source_file)
+        else:
+            # Fallback to default export
+            balanced_audio.export(str(balanced_output_path), format="wav")
         
         # Create ground truth file
         self.create_ground_truth_file(balanced_timestamps, str(gt_output_path))
@@ -799,9 +759,12 @@ class AudioProcessor:
             dev_output_path = output_path / f"{file_stem}_dev.wav"
             dev_gt_path = output_path / f"{file_stem}_dev.txt"
             
-            # Save dev audio with original sample rate
-            original_sample_rate = self.get_original_sample_rate(dev_segments)
-            self.save_audio_with_sample_rate(dev_audio, dev_output_path, original_sample_rate)
+            # Save dev audio with original sample rate from first file
+            first_source_file = input_files[0].audio_path if input_files else None
+            if first_source_file:
+                self.save_audio_with_original_sample_rate(dev_audio, dev_output_path, first_source_file)
+            else:
+                dev_audio.export(str(dev_output_path), format="wav")
             self.create_ground_truth_file(dev_timestamps, str(dev_gt_path))
             
             result.dev_output = str(dev_output_path)
@@ -814,9 +777,12 @@ class AudioProcessor:
             train_output_path = output_path / f"{file_stem}_train.wav"
             train_gt_path = output_path / f"{file_stem}_train.txt"
             
-            # Save train audio with original sample rate
-            original_sample_rate = self.get_original_sample_rate(train_segments)
-            self.save_audio_with_sample_rate(train_audio, train_output_path, original_sample_rate)
+            # Save train audio with original sample rate from first file
+            first_source_file = input_files[0].audio_path if input_files else None
+            if first_source_file:
+                self.save_audio_with_original_sample_rate(train_audio, train_output_path, first_source_file)
+            else:
+                train_audio.export(str(train_output_path), format="wav")
             self.create_ground_truth_file(train_timestamps, str(train_gt_path))
             
             result.train_output = str(train_output_path)
@@ -833,7 +799,7 @@ class AudioProcessor:
         all_segments, file_durations = self.load_and_analyze_multiple_files(input_files)
         
         # Calculate total content available
-        total_speech_ms, total_silence_ms = self._calculate_segment_totals(all_segments)
+        total_speech_ms, total_silence_ms = self._calculate_totals(all_segments)
         total_duration_sec = sum(file_durations.values())
         
         print(f"Total content available: {self.format_duration((total_speech_ms + total_silence_ms))}")
@@ -844,7 +810,7 @@ class AudioProcessor:
         test_segments = self.create_balanced_timeline_multi_file(all_segments)
         
         # Calculate TEST statistics for reporting
-        test_speech_ms, test_non_speech_ms = self._calculate_segment_totals(test_segments)
+        test_speech_ms, test_non_speech_ms = self._calculate_totals(test_segments)
         
         # Save TEST set as temporal sequences
         print(f"Creating TEST temporal sequences...")
@@ -935,7 +901,7 @@ class AudioProcessor:
         """Create a balanced subset using the same algorithms as the main processing."""
         speech_segments, silence_segments = self._separate_segments_by_type(segments)
         
-        total_speech_ms, total_silence_ms = self._calculate_segment_totals(segments)
+        total_speech_ms, total_silence_ms = self._calculate_totals(segments)
         
         # Check if we have any content at all
         if total_speech_ms == 0 or total_silence_ms == 0:
@@ -998,24 +964,19 @@ class AudioProcessor:
         
         return dev_segments, train_segments
 
-    def get_original_sample_rate(self, segments: List[AudioSegmentInfo]) -> int:
-        """Get the sample rate from the first segment's source file."""
-        if not segments:
-            return 44100  # Default to 44.1kHz if no segments
-        
-        # Get the first segment and its file_id
-        first_segment = segments[0]
-        file_id = first_segment.file_id
-        
-        # Get the source audio from cache
-        if file_id in self.audio_cache:
-            source_audio = self.audio_cache[file_id]
-            return source_audio.frame_rate
-        
-        return 44100  # Default to 44.1kHz if not found
+    def get_sample_rate_from_file(self, file_path: str) -> int:
+        """Get sample rate directly from an audio file."""
+        try:
+            audio = AudioSegment.from_file(file_path)
+            return audio.frame_rate
+        except Exception as e:
+            print(f"Warning: Could not read sample rate from {file_path}: {e}")
+            return self.config.default_sample_rate
     
-    def save_audio_with_sample_rate(self, audio: AudioSegment, output_path: Path, sample_rate: int) -> None:
-        """Save audio file with consistent sample rate."""
+    def save_audio_with_original_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
+        """Save audio file using the sample rate from the original source file."""
+        sample_rate = self.get_sample_rate_from_file(source_file_path)
+        
         temp_path = output_path.with_suffix('.tmp.wav')
         
         try:
@@ -1023,11 +984,11 @@ class AudioProcessor:
             if temp_path.exists():
                 temp_path.unlink()
             
-            # Export with explicit sample rate parameter
+            # Export with sample rate from original file
             audio.export(
                 str(temp_path), 
                 format="wav",
-                parameters=["-ar", str(sample_rate)]  # Set sample rate explicitly
+                parameters=["-ar", str(sample_rate)]
             )
             
             # Verify export worked correctly
@@ -1044,16 +1005,22 @@ class AudioProcessor:
                 temp_path.unlink()
             raise e
     
-    def _calculate_segment_totals(self, segments: List[AudioSegmentInfo]) -> Tuple[float, float]:
-        """Calculate total speech and non-speech durations from segments."""
-        speech_ms = sum(s.duration for s in segments if s.type == "speech")
-        non_speech_ms = sum(s.duration for s in segments if s.type == "non-speech")
-        return speech_ms, non_speech_ms
-    
-    def _calculate_timestamp_totals(self, timestamps: List[TimestampMapping]) -> Tuple[float, float]:
-        """Calculate total speech and non-speech durations from timestamps."""
-        speech_ms = sum(ts.duration_sec * 1000 for ts in timestamps if ts.type == "speech")
-        non_speech_ms = sum(ts.duration_sec * 1000 for ts in timestamps if ts.type == "non-speech")
+    def _calculate_totals(self, data: List) -> Tuple[float, float]:
+        """Calculate total speech and non-speech durations from segments or timestamps."""
+        if not data:
+            return 0.0, 0.0
+        
+        # Handle AudioSegmentInfo objects
+        if hasattr(data[0], 'duration'):
+            speech_ms = sum(item.duration for item in data if item.type == "speech")
+            non_speech_ms = sum(item.duration for item in data if item.type == "non-speech")
+        # Handle TimestampMapping objects
+        elif hasattr(data[0], 'duration_sec'):
+            speech_ms = sum(item.duration_sec * 1000 for item in data if item.type == "speech")
+            non_speech_ms = sum(item.duration_sec * 1000 for item in data if item.type == "non-speech")
+        else:
+            raise ValueError("Unsupported data type for calculation")
+        
         return speech_ms, non_speech_ms
 
     def _separate_segments_by_type(self, segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
