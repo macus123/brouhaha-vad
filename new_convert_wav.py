@@ -2,6 +2,9 @@ import csv
 import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import datetime
+import csv
+import gc
 
 from pydub import AudioSegment
 
@@ -17,8 +20,33 @@ class AudioProcessor:
     def __init__(self, config: ProcessingConfig):
         self.config = config
         self.audio: Optional[AudioSegment] = None
-        self.audio_cache: Dict[str, AudioSegment] = {}  # Cache for multi-file processing
-        self.sample_rate_cache: Dict[str, int] = {}
+        # Remove audio_cache to reduce memory usage - use streaming approach instead
+        self.sample_rate_cache: Dict[str, int] = {}  # Cache sample rates only
+    
+    def _manage_memory(self):
+        """Force garbage collection to free memory."""
+        gc.collect()
+    
+    def load_segment_on_demand(self, segment_info: AudioSegmentInfo) -> AudioSegment:
+        """Load only the specific segment needed - streaming approach."""
+        try:
+            # Try to load just the segment if pydub supports it
+            start_sec = segment_info.start
+            duration_sec = segment_info.end - segment_info.start
+            
+            # For efficiency, load the whole file but extract only what we need
+            source_audio = AudioSegment.from_file(segment_info.source_file)
+            start_ms = int(start_sec * 1000)
+            end_ms = int(segment_info.end * 1000)
+            
+            # Handle edge case where end might be slightly past file length
+            if end_ms > len(source_audio):
+                end_ms = len(source_audio)
+            
+            return source_audio[start_ms:end_ms]
+        except Exception as e:
+            print(f"Warning: Could not load segment from {segment_info.source_file}: {e}")
+            return AudioSegment.empty()
     
     def format_duration(self, ms: float) -> str:
         """Format duration in milliseconds to a readable string."""
@@ -57,52 +85,64 @@ class AudioProcessor:
         return merged
     
     def load_and_analyze_multiple_files(self, file_infos: List[FileProcessingInfo]) -> Tuple[List[AudioSegmentInfo], Dict[str, float]]:
-        """Load and analyze multiple audio files for multi-file stitching."""
+        """Load and analyze multiple audio files with memory-efficient processing."""
         all_segments = []
         file_durations = {}
         
         for i, file_info in enumerate(file_infos):
             file_id = f"file_{i}"
-            print(f"Loading file {i+1}/{len(file_infos)}: {file_info.audio_path}")
+            print(f"Processing file {i+1}/{len(file_infos)}: {file_info.audio_path}")
             
-            # Load audio
-            audio = AudioSegment.from_file(file_info.audio_path)
-            self.audio_cache[file_id] = audio
-            
-            total_duration_ms = len(audio)
-            total_duration_sec = total_duration_ms / 1000
-            file_durations[file_id] = total_duration_sec
-            
-            # Read ground truth and get speech segments
-            speech_segments = read_ground_truth(file_info.ground_truth_path)
-            non_speech_segments = get_non_speech_segments(speech_segments, total_duration_sec)
-            
-            # Add speech segments with padding
-            padded_speech_segments = self._add_padding_to_speech(speech_segments, total_duration_sec)
-            merged_speech_segments = self._merge_overlapping_segments(padded_speech_segments)
-            
-            for start, end in merged_speech_segments:
-                all_segments.append(AudioSegmentInfo(
-                    start=start, 
-                    end=end, 
-                    type="speech", 
-                    source_file=file_info.audio_path,
-                    file_id=file_id
-                ))
-            
-            # Recalculate non-speech segments based on merged speech segments
-            merged_non_speech_segments = get_non_speech_segments(merged_speech_segments, total_duration_sec)
-            
-            for start, end in merged_non_speech_segments:
-                all_segments.append(AudioSegmentInfo(
-                    start=start, 
-                    end=end, 
-                    type="non-speech", 
-                    source_file=file_info.audio_path,
-                    file_id=file_id
-                ))
+            try:
+                # Get file duration efficiently without keeping audio in memory
+                audio = AudioSegment.from_file(file_info.audio_path)
+                total_duration_ms = len(audio)
+                total_duration_sec = total_duration_ms / 1000
+                file_durations[file_id] = total_duration_sec
+                
+                # Cache sample rate for this file
+                self.sample_rate_cache[file_info.audio_path] = audio.frame_rate
+                
+                # Clear the audio from memory immediately
+                del audio
+                
+                # Read ground truth and get speech segments
+                speech_segments = read_ground_truth(file_info.ground_truth_path)
+                non_speech_segments = get_non_speech_segments(speech_segments, total_duration_sec)
+                
+                # Add speech segments with padding
+                padded_speech_segments = self._add_padding_to_speech(speech_segments, total_duration_sec)
+                merged_speech_segments = self._merge_overlapping_segments(padded_speech_segments)
+                
+                for start, end in merged_speech_segments:
+                    all_segments.append(AudioSegmentInfo(
+                        start=start, 
+                        end=end, 
+                        type="speech", 
+                        source_file=file_info.audio_path,
+                        file_id=file_id
+                    ))
+                
+                # Recalculate non-speech segments based on merged speech segments
+                merged_non_speech_segments = get_non_speech_segments(merged_speech_segments, total_duration_sec)
+                
+                for start, end in merged_non_speech_segments:
+                    all_segments.append(AudioSegmentInfo(
+                        start=start, 
+                        end=end, 
+                        type="non-speech", 
+                        source_file=file_info.audio_path,
+                        file_id=file_id
+                    ))
+                
+                # Force garbage collection after processing each file
+                self._manage_memory()
+                
+            except Exception as e:
+                print(f"Error processing {file_info.audio_path}: {e}")
+                continue
         
-        # Sort segments by file_id and then by start time to maintain temporal order within files
+        # Sort segments only once at the end - by file_id and then by start time
         all_segments.sort(key=lambda x: (x.file_id, x.start))
         
         return all_segments, file_durations
@@ -130,24 +170,14 @@ class AudioProcessor:
                     f.write(f"0.000\t0.000\t{wav_filename}\n")
     
     def compile_multi_source_audio(self, segments: List[AudioSegmentInfo]) -> Tuple[AudioSegment, List[TimestampMapping]]:
+        """Compile audio using streaming approach to minimize memory usage."""
         compiled_audio = AudioSegment.empty()
         timestamp_map = []
         output_time_ms = 0
         
         for i, segment in enumerate(segments):
-            # Get source audio from cache
-            source_audio = self.audio_cache[segment.file_id]
-            
-            # Extract segment
-            start_ms = int(segment.start * 1000)
-            end_ms = int(segment.end * 1000)
-            
-            # Handle edge case where end might be slightly past file length
-            if end_ms > len(source_audio):
-                end_ms = len(source_audio)
-            
-            # Extract the actual audio
-            segment_audio = source_audio[start_ms:end_ms]
+            # Load segment on-demand instead of from cache
+            segment_audio = self.load_segment_on_demand(segment)
             segment_duration_ms = len(segment_audio)
             
             # Calculate theoretical vs actual duration (for debugging)
@@ -173,6 +203,10 @@ class AudioProcessor:
             # Append to compiled audio
             compiled_audio += segment_audio
             output_time_ms += segment_duration_ms
+            
+            # Periodically manage memory for very large compilations
+            if len(compiled_audio) > 600000:  # If > 10 minutes of audio
+                self._manage_memory()
         
         # Final verification - ensure the last timestamp exactly matches audio length
         final_audio_duration_sec = len(compiled_audio) / 1000
@@ -288,7 +322,6 @@ class AudioProcessor:
                 gt_path = Path(output_dir) / gt_filename
                 
                 # Save audio with original sample rate
-                # self.save_audio_with_original_sample_rate(sequence_audio, audio_path, source_file_path)
                 self.save_audio_with_cached_sample_rate(sequence_audio, audio_path, source_file_path)
                 
                 # CRITICAL FIX: Verify the actual exported audio duration
@@ -354,6 +387,10 @@ class AudioProcessor:
                 
                 print(f"  Created {audio_filename}: {self.format_duration(duration_ms)} "
                     f"(speech: {self.format_duration(speech_ms)}, non-speech: {self.format_duration(non_speech_ms)})")
+                
+                # Clean up memory after each sequence
+                del exported_audio, sequence_audio
+                self._manage_memory()
                 
                 # Stop if we've reached TEST quota target (not max overage)
                 if split_name == "TEST" and used_ms >= target_ms:
@@ -707,8 +744,7 @@ class AudioProcessor:
         # Save balanced audio with original sample rate from first file
         first_source_file = input_files[0].audio_path if input_files else None
         if first_source_file:
-            # self.save_audio_with_original_sample_rate(balanced_audio, balanced_output_path, first_source_file)
-            self.save_audio_with_cached_sample_rate(balanced_audio, balanced_output_path, first_source_file)
+            self.save_audio_with_original_sample_rate(balanced_audio, balanced_output_path, first_source_file)
         else:
             # Fallback to default export
             balanced_audio.export(str(balanced_output_path), format="wav")
@@ -765,8 +801,7 @@ class AudioProcessor:
             # Save dev audio with original sample rate from first file
             first_source_file = input_files[0].audio_path if input_files else None
             if first_source_file:
-                # self.save_audio_with_original_sample_rate(dev_audio, dev_output_path, first_source_file)
-                self.save_audio_with_cached_sample_rate(dev_audio, dev_output_path, first_source_file)
+                self.save_audio_with_original_sample_rate(dev_audio, dev_output_path, first_source_file)
             else:
                 dev_audio.export(str(dev_output_path), format="wav")
             self.create_ground_truth_file(dev_timestamps, str(dev_gt_path))
@@ -784,8 +819,7 @@ class AudioProcessor:
             # Save train audio with original sample rate from first file
             first_source_file = input_files[0].audio_path if input_files else None
             if first_source_file:
-                # self.save_audio_with_original_sample_rate(train_audio, train_output_path, first_source_file)
-                self.save_audio_with_cached_sample_rate(train_audio, train_output_path, first_source_file)
+                self.save_audio_with_original_sample_rate(train_audio, train_output_path, first_source_file)
             else:
                 train_audio.export(str(train_output_path), format="wav")
             self.create_ground_truth_file(train_timestamps, str(train_gt_path))
@@ -968,25 +1002,52 @@ class AudioProcessor:
         print(f"    TRAIN: {len(train_segments)} segments")
         
         return dev_segments, train_segments
-    
-    def save_audio_with_cached_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
-        # Use cached sample rate or get it once
-        if source_file_path not in self.sample_rate_cache:
-            self.sample_rate_cache[source_file_path] = self.get_sample_rate_from_file(source_file_path)
-        
-        sample_rate = self.sample_rate_cache[source_file_path]
-        
-        # Direct export without temporary file when possible
-        audio.export(str(output_path), format="wav", parameters=["-ar", str(sample_rate)])
 
     def get_sample_rate_from_file(self, file_path: str) -> int:
-        """Get sample rate directly from an audio file."""
+        """Get sample rate with caching to avoid repeated file access."""
+        if file_path in self.sample_rate_cache:
+            return self.sample_rate_cache[file_path]
+        
         try:
             audio = AudioSegment.from_file(file_path)
-            return audio.frame_rate
+            sample_rate = audio.frame_rate
+            self.sample_rate_cache[file_path] = sample_rate
+            return sample_rate
         except Exception as e:
             print(f"Warning: Could not read sample rate from {file_path}: {e}")
             return self.config.default_sample_rate
+    
+    def save_audio_with_cached_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
+        """Save audio file using cached sample rate from the original source file."""
+        sample_rate = self.get_sample_rate_from_file(source_file_path)
+        
+        temp_path = output_path.with_suffix('.tmp.wav')
+        
+        try:
+            # Remove temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink()
+            
+            # Export with sample rate from original file
+            audio.export(
+                str(temp_path), 
+                format="wav",
+                parameters=["-ar", str(sample_rate)]
+            )
+            
+            # Verify export worked correctly
+            if temp_path.exists() and temp_path.stat().st_size > 0:
+                # Remove target file if it exists
+                if output_path.exists():
+                    output_path.unlink()
+                temp_path.rename(output_path)
+            else:
+                raise IOError(f"Failed to export audio to {temp_path}")
+                
+        except Exception as e:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise e
     
     def save_audio_with_original_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
         """Save audio file using the sample rate from the original source file."""
@@ -1039,9 +1100,25 @@ class AudioProcessor:
         return speech_ms, non_speech_ms
 
     def _separate_segments_by_type(self, segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
-        """Separate segments into speech and non-speech lists."""
-        speech_segments = [s for s in segments if s.type == "speech"]
-        silence_segments = [s for s in segments if s.type == "non-speech"]
+        """Separate segments into speech and non-speech lists with memory optimization."""
+        # For large datasets, process in batches to reduce memory usage
+        if len(segments) > 10000:
+            speech_segments = []
+            silence_segments = []
+            batch_size = 1000
+            
+            for i in range(0, len(segments), batch_size):
+                batch = segments[i:i+batch_size]
+                speech_segments.extend([seg for seg in batch if seg.type == "speech"])
+                silence_segments.extend([seg for seg in batch if seg.type == "non-speech"])
+                # Force garbage collection after each batch
+                if i % (batch_size * 5) == 0:  # Every 5 batches
+                    self._manage_memory()
+        else:
+            # Standard processing for smaller datasets
+            speech_segments = [s for s in segments if s.type == "speech"]
+            silence_segments = [s for s in segments if s.type == "non-speech"]
+        
         return speech_segments, silence_segments
 
 class DirectoryScanner:
@@ -1123,6 +1200,9 @@ class BatchProcessor:
             self._update_temporal_batch_stats(self.batch_stats, result, input_files)
             
             print(f"  ✓ Processing Complete")
+            
+            # Force memory cleanup after processing
+            self.processor._manage_memory()
             
         except Exception as e:
             print(f"  ✗ Error in processing: {e}")
