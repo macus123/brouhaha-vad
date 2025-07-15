@@ -321,3 +321,80 @@ Now let's test it again: Excellent! The solution worked perfectly! 🎉
 - **Future-proof** - Works correctly regardless of input file sample rates
 
 The sample rate consistency fix has completely resolved the timing mismatch issue without requiring any changes to split_seg.py. Your pipeline now produces accurate temporal sequences with perfectly synchronized ground truth files!
+
+
+# Analysis: Speech Front-Loading and File Representation Issues
+
+After comparing the scripts, I can explain why you're seeing front-loaded speech and issues with file representation:
+
+## Why Speech Is Front-Loaded
+
+In both scripts, speech becomes front-loaded because of how the timeline creation works:
+
+```python
+# In both scripts
+def create_balanced_timeline_multi_file(self, segments):
+    # ...
+    return self._distribute_silence_intelligently_multi_file(
+        speech_segments, silence_segments, speech_target_ms, silence_target_ms)
+```
+
+This function sorts speech segments in a way that doesn't maintain original temporal distribution:
+
+```python
+# In convert_wav.py
+speech_segments.sort(key=lambda x: (x.file_id, x.start))
+silence_segments.sort(key=lambda x: x.duration)  # Sort by duration, not position
+```
+
+The silence sorting by **duration rather than position** is the key issue - it completely breaks the natural timing pattern of the original audio.
+
+## Why archive_convert_wav.py Has Better Representation
+
+The archive version has slightly better representation because:
+
+1. **More sophisticated silence distribution**: 
+   ```python
+   # In archive_convert_wav.py
+   reserved_silence = []
+   # ... complex logic to select which silence segments to reserve
+   ```
+
+2. **Better silence interspersion**:
+   ```python
+   # In archive_convert_wav.py
+   # Find long speech runs and insert silence between them
+   speech_runs = self._find_speech_runs(balanced_segments)
+   speech_runs.sort(key=lambda x: x[1] - x[0], reverse=True)
+   ```
+
+## The Core Problem
+
+Both scripts suffer from the same fundamental issue: they use a **quota-based approach** that prioritizes meeting duration targets over preserving natural audio flow:
+
+```python
+def _alternate_segments_multi_file(self, speech_segments, silence_segments, speech_quota, silence_quota):
+    # ... focuses on meeting quota targets, not maintaining natural timing
+```
+
+This quota system causes:
+
+1. Speech segments to be chosen primarily based on meeting the target duration
+2. Silence segments to be distributed based on duration rather than original position
+3. The final timeline to be ordered by file_id first, which means all segments from one file are processed before moving to the next
+
+## How To Fix This
+
+If you want more natural representation:
+
+1. Replace the segment selection method to preserve original relative timing:
+   ```python
+   # Sort both speech and silence by original position
+   segments.sort(key=lambda x: (x.file_id, x.start))
+   ```
+
+2. Modify the `_alternate_segments_multi_file` function to maintain temporal proximity between segments
+
+3. Use windowing techniques to select segments that are closer together in the original audio
+
+Would you like me to provide specific code changes to fix this front-loading issue?
