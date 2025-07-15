@@ -286,9 +286,6 @@ class AudioProcessor:
                 
                 audio_path = Path(output_dir) / audio_filename
                 gt_path = Path(output_dir) / gt_filename
-                
-                # Save audio with original sample rate
-                # self.save_audio_with_original_sample_rate(sequence_audio, audio_path, source_file_path)
                 self.save_audio_with_cached_sample_rate(sequence_audio, audio_path, source_file_path)
                 
                 # CRITICAL FIX: Verify the actual exported audio duration
@@ -570,23 +567,6 @@ class AudioProcessor:
         
         return balanced_segments
     
-    def _should_add_speech(self, last_type: str, speech_quota: float, silence_quota: float,
-                          speech_index: int, silence_index: int, total_speech: int, 
-                          total_silence: int) -> bool:
-        """Determine whether to add speech or silence segment next."""
-        if last_type == "speech" and silence_quota > 0 and silence_index < total_silence:
-            return False
-        elif last_type == "non-speech" and speech_quota > 0 and speech_index < total_speech:
-            return True
-        else:
-            # Add whatever has quota remaining
-            if speech_quota > 0 and speech_index < total_speech:
-                return True
-            elif silence_quota > 0 and silence_index < total_silence:
-                return False
-            else:
-                return False
-    
     def _should_add_speech_with_priority(self, last_type: str, speech_quota: float, silence_quota: float,
                                        speech_index: int, silence_index: int, total_speech: int, 
                                        total_silence: int, next_speech_duration: float, speech_quota_max: float) -> bool:
@@ -707,7 +687,6 @@ class AudioProcessor:
         # Save balanced audio with original sample rate from first file
         first_source_file = input_files[0].audio_path if input_files else None
         if first_source_file:
-            # self.save_audio_with_original_sample_rate(balanced_audio, balanced_output_path, first_source_file)
             self.save_audio_with_cached_sample_rate(balanced_audio, balanced_output_path, first_source_file)
         else:
             # Fallback to default export
@@ -765,7 +744,6 @@ class AudioProcessor:
             # Save dev audio with original sample rate from first file
             first_source_file = input_files[0].audio_path if input_files else None
             if first_source_file:
-                # self.save_audio_with_original_sample_rate(dev_audio, dev_output_path, first_source_file)
                 self.save_audio_with_cached_sample_rate(dev_audio, dev_output_path, first_source_file)
             else:
                 dev_audio.export(str(dev_output_path), format="wav")
@@ -781,10 +759,8 @@ class AudioProcessor:
             train_output_path = output_path / f"{file_stem}_train.wav"
             train_gt_path = output_path / f"{file_stem}_train.txt"
             
-            # Save train audio with original sample rate from first file
             first_source_file = input_files[0].audio_path if input_files else None
             if first_source_file:
-                # self.save_audio_with_original_sample_rate(train_audio, train_output_path, first_source_file)
                 self.save_audio_with_cached_sample_rate(train_audio, train_output_path, first_source_file)
             else:
                 train_audio.export(str(train_output_path), format="wav")
@@ -987,38 +963,6 @@ class AudioProcessor:
         except Exception as e:
             print(f"Warning: Could not read sample rate from {file_path}: {e}")
             return self.config.default_sample_rate
-    
-    def save_audio_with_original_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
-        """Save audio file using the sample rate from the original source file."""
-        sample_rate = self.get_sample_rate_from_file(source_file_path)
-        
-        temp_path = output_path.with_suffix('.tmp.wav')
-        
-        try:
-            # Remove temp file if it exists
-            if temp_path.exists():
-                temp_path.unlink()
-            
-            # Export with sample rate from original file
-            audio.export(
-                str(temp_path), 
-                format="wav",
-                parameters=["-ar", str(sample_rate)]
-            )
-            
-            # Verify export worked correctly
-            if temp_path.exists() and temp_path.stat().st_size > 0:
-                # Remove target file if it exists
-                if output_path.exists():
-                    output_path.unlink()
-                temp_path.rename(output_path)
-            else:
-                raise IOError(f"Failed to export audio to {temp_path}")
-                
-        except Exception as e:
-            if temp_path.exists():
-                temp_path.unlink()
-            raise e
     
     def _calculate_totals(self, data: List) -> Tuple[float, float]:
         """Calculate total speech and non-speech durations from segments or timestamps."""
