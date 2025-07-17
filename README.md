@@ -246,4 +246,167 @@ def process_batch(self, input_files, output_dir):
 - **TRAIN set:** ~8 minutes from remaining audio
 - **Statistics:** Detailed continuity analysis, sequence information
 
+# Speech Processing Algorithm Design: Multi-file Speech/Silence Balancing
 
+## Core Algorithm Philosophy
+
+Let me walk you through how our temporal sequence generator works, focusing on speech segment prioritization, quota management, and timeline construction across multiple files.
+
+## 1. Speech Prioritization Strategy
+
+The algorithm fundamentally prioritizes speech integrity through several mechanisms:
+
+```python
+# Speech segments are never truncated, unlike silence segments
+if segment.type == "speech" and speech_used < file_speech_quota[file_id]:
+    if speech_used + segment.duration <= file_speech_quota[file_id]:
+        file_timeline.append(segment)
+        speech_used += segment.duration
+    # Don't truncate speech - prefer to skip rather than truncate
+```
+
+This is a critical design choice - **we never truncate speech segments** as doing so would harm the linguistic coherence of the resulting dataset. Silence, on the other hand, can be truncated without semantic loss:
+
+```python
+# Silence can be truncated to fit quota precisely
+remaining = file_silence_quota[file_id] - silence_used
+if remaining > 100:  # Only add if at least 100ms
+    partial = AudioSegmentInfo(
+        start=segment.start,
+        end=segment.start + (remaining / 1000),
+        type=segment.type,
+        source_file=segment.source_file,
+        file_id=segment.file_id
+    )
+    file_timeline.append(partial)
+    silence_used = file_silence_quota[file_id]
+```
+
+## 2. Multi-File Quota Management
+
+The quota management system works with three levels of allocation:
+
+1. **Global quota**: Total speech/silence across all files
+2. **Per-file quota**: Proportional allocation to each source file 
+3. **Segment selection**: Taking segments in temporal order until quota is filled
+
+```python
+# Calculate quota per file based on available content
+file_speech_content = {}
+file_silence_content = {}
+for file_id, segments in segments_by_file.items():
+    file_speech_content[file_id] = sum(s.duration for s in segments if s.type == "speech")
+    file_silence_content[file_id] = sum(s.duration for s in segments if s.type == "non-speech")
+
+# Assign quota proportionally to each file
+file_speech_quota = {}
+file_silence_quota = {}
+for file_id in segments_by_file:
+    if total_speech > 0:
+        file_speech_quota[file_id] = speech_quota * (file_speech_content[file_id] / total_speech)
+```
+
+This proportional allocation ensures each source file contributes according to its content availability, preventing over-representation of any single file.
+
+## 3. Timeline Construction and Silence Distribution
+
+The timeline construction is handled by `_distribute_silence_intelligently_multi_file`, which employs a sophisticated approach:
+
+```python
+# Reserve silence for interspersing (a portion defined by silence_reserve_ratio)
+reserved_silence_ms = silence_target_ms * self.config.silence_reserve_ratio
+primary_silence_ms = silence_target_ms - reserved_silence_ms
+```
+
+The algorithm performs a two-stage silence allocation:
+1. Primary silence is selected based on temporal position
+2. Reserved silence is strategically interspersed between speech segments
+
+```python
+# Take some percentage of shortest silence segments for reservation
+reservation_count = max(1, int(len(silence_for_reservation) * 0.3))
+for i in range(min(reservation_count, len(silence_for_reservation))):
+    segment = silence_for_reservation[i]
+    if reserved_silence_duration < reserved_silence_ms:
+        reserved_silence.append(segment)
+        reserved_silence_duration += segment.duration
+```
+
+Later, this reserved silence is inserted into "speech runs" - consecutive speech segments that would benefit from silence breaks:
+
+```python
+# Find long speech runs and insert silence
+speech_runs = self._find_speech_runs(balanced_segments)
+speech_runs.sort(key=lambda x: x[1] - x[0], reverse=True)  # Longest first
+
+for run_start, run_end in speech_runs:
+    run_length = run_end - run_start + 1
+    num_to_insert = run_length // 3  # Insert silence after every ~3 segments
+    
+    if num_to_insert > 0 and reserved_index < len(reserved_silence):
+        # Calculate insertion positions
+        positions = []
+        for i in range(1, num_to_insert + 1):
+            pos = run_start + (i * run_length) // (num_to_insert + 1)
+            positions.append(pos + inserted)
+```
+
+## 4. Temporal Sequence Generation
+
+The final stage involves grouping segments into natural sequences, implemented in `group_segments_into_temporal_sequences`:
+
+```python
+# Group segments by file first
+file_segments = {}
+for segment in segments:
+    if segment.file_id not in file_segments:
+        file_segments[segment.file_id] = []
+    file_segments[segment.file_id].append(segment)
+```
+
+Then for each file, it:
+1. Creates sequences based on temporal continuity (gaps <= 0.5s)
+2. Targets minimum sequence length (3s)
+3. Balances speech and silence content
+4. Merges very short sequences when appropriate
+
+```python
+# If current sequence doesn't meet criteria, try to extend it despite the gap
+elif current_duration < min_sequence_length or not (has_speech and has_silence):
+    # If adding this segment would create a balanced sequence, include it
+    if (has_speech and segment.type == "non-speech") or (has_silence and segment.type == "speech"):
+        current_sequence.append(segment)
+```
+
+This creates sequences that maintain natural speech patterns while ensuring balanced representation.
+
+## 5. Set Creation (TEST/DEV/TRAIN)
+
+For the TEST set, we target specific duration and speech ratio. For DEV and TRAIN sets, we:
+
+1. Find remaining segments after TEST set creation
+2. Split them according to `dev_ratio` (default 20%)
+3. Apply the same balancing algorithm to each set
+
+```python
+# Find remaining segments after TEST set creation
+used_segments = set(id(segment) for segment in test_segments)
+remaining_segments = [seg for seg in all_segments if id(seg) not in used_segments]
+
+# Split remaining segments into DEV and TRAIN
+dev_segments, train_segments = self._split_remaining_segments(remaining_segments)
+```
+
+This creates coherent sequences across all three sets while maintaining the target speech-to-silence ratio.
+
+## Performance and Edge Cases
+
+The algorithm handles edge cases gracefully:
+- Insufficient content: Adjusts targets proportionally
+- Empty files: Skips without breaking
+- Very short segments: Merges with neighbors when appropriate
+- Long speech runs: Injects silence to create natural breaks
+
+The complexity is approximately O(n log n) due to sorting operations, with memory usage proportional to the total content processed.
+
+Any questions about specific parts of the implementation?
