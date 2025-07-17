@@ -422,150 +422,163 @@ class AudioProcessor:
         # Apply sophisticated silence distribution algorithm (preserved from original)
         return self._distribute_silence_intelligently_multi_file(speech_segments, silence_segments, 
                                                                speech_target_ms, silence_target_ms)
+
+    def _create_natural_timeline(self, speech_segments: List[AudioSegmentInfo],
+                            silence_segments: List[AudioSegmentInfo],
+                            speech_quota: float, silence_quota: float,
+                            reserved_silence: List[AudioSegmentInfo]) -> List[AudioSegmentInfo]:
+        # Group segments by file_id to maintain file coherence
+        segments_by_file = {}
+        for segment in speech_segments + silence_segments:
+            if segment.file_id not in segments_by_file:
+                segments_by_file[segment.file_id] = []
+            segments_by_file[segment.file_id].append(segment)
+        
+        # Sort all segments by start time within each file
+        for file_id in segments_by_file:
+            segments_by_file[file_id].sort(key=lambda x: x.start)
+        
+        # Calculate quota per file based on available content
+        file_speech_content = {}
+        file_silence_content = {}
+        for file_id, segments in segments_by_file.items():
+            file_speech_content[file_id] = sum(s.duration for s in segments if s.type == "speech")
+            file_silence_content[file_id] = sum(s.duration for s in segments if s.type == "non-speech")
+        
+        total_speech = sum(file_speech_content.values())
+        total_silence = sum(file_silence_content.values())
+        
+        # Assign quota proportionally to each file
+        file_speech_quota = {}
+        file_silence_quota = {}
+        for file_id in segments_by_file:
+            if total_speech > 0:
+                file_speech_quota[file_id] = speech_quota * (file_speech_content[file_id] / total_speech)
+            else:
+                file_speech_quota[file_id] = 0
+                
+            if total_silence > 0:
+                file_silence_quota[file_id] = silence_quota * (file_silence_content[file_id] / total_silence)
+            else:
+                file_silence_quota[file_id] = 0
+        
+        # Select segments from each file respecting temporal order
+        timeline = []
+        for file_id, segments in segments_by_file.items():
+            file_timeline = []
+            speech_used = 0
+            silence_used = 0
+            
+            for segment in segments:
+                if segment.type == "speech" and speech_used < file_speech_quota[file_id]:
+                    if speech_used + segment.duration <= file_speech_quota[file_id]:
+                        file_timeline.append(segment)
+                        speech_used += segment.duration
+                    # Don't truncate speech segments - prefer to skip
+                    
+                elif segment.type == "non-speech" and silence_used < file_silence_quota[file_id]:
+                    if silence_used + segment.duration <= file_silence_quota[file_id]:
+                        file_timeline.append(segment)
+                        silence_used += segment.duration
+                    else:
+                        # Truncate silence segments if needed
+                        remaining = file_silence_quota[file_id] - silence_used
+                        if remaining > 100:  # Only add if at least 100ms
+                            partial = AudioSegmentInfo(
+                                start=segment.start,
+                                end=segment.start + (remaining / 1000),
+                                type=segment.type,
+                                source_file=segment.source_file,
+                                file_id=segment.file_id
+                            )
+                            file_timeline.append(partial)
+                            silence_used = file_silence_quota[file_id]
+            
+            timeline.extend(file_timeline)
+        
+        # Intersperse reserved silence in long speech runs
+        final_segments = self._intersperse_reserved_silence(timeline, reserved_silence)
+        
+        return final_segments
     
     def _distribute_silence_intelligently_multi_file(self, speech_segments: List[AudioSegmentInfo], 
-                                                   silence_segments: List[AudioSegmentInfo], 
-                                                   speech_target_ms: float, silence_target_ms: float) -> List[AudioSegmentInfo]:
-        """Multi-file version of sophisticated silence distribution."""
+                                                silence_segments: List[AudioSegmentInfo], 
+                                                speech_target_ms: float, silence_target_ms: float) -> List[AudioSegmentInfo]:
+        """Multi-file version of sophisticated silence distribution with improved temporal representation."""
         # Reserve silence for interspersing (same algorithm)
         reserved_silence_ms = silence_target_ms * self.config.silence_reserve_ratio
         primary_silence_ms = silence_target_ms - reserved_silence_ms
         
-        # Sort segments - preserve temporal order within files
+        # Sort segments by their original temporal position
         speech_segments.sort(key=lambda x: (x.file_id, x.start))
-        silence_segments.sort(key=lambda x: x.duration)  # Sort by duration for reservation
+        
+        # CHANGE: Sort silence segments by file and position instead of duration
+        silence_segments.sort(key=lambda x: (x.file_id, x.start))
+        
+        # Create a copy for reservation (we'll still need some silence for interspersing)
+        silence_for_reservation = sorted(silence_segments.copy(), key=lambda x: x.duration)
         
         # Reserve short silence segments for interspersing
         reserved_silence = []
         reserved_silence_duration = 0
         
-        for segment in silence_segments:
+        # Take some percentage of shortest silence segments for reservation
+        reservation_count = max(1, int(len(silence_for_reservation) * 0.3))
+        for i in range(min(reservation_count, len(silence_for_reservation))):
+            segment = silence_for_reservation[i]
             if reserved_silence_duration < reserved_silence_ms:
-                if reserved_silence_duration + segment.duration <= reserved_silence_ms * 1.1:
-                    reserved_silence.append(segment)
-                    reserved_silence_duration += segment.duration
-                elif reserved_silence_duration < reserved_silence_ms * 0.9:
-                    # Split segment if needed
-                    remaining_needed = reserved_silence_ms - reserved_silence_duration
-                    if segment.duration > remaining_needed * 2:
-                        split_segment = AudioSegmentInfo(
-                            start=segment.start,
-                            end=segment.start + (remaining_needed / 1000),
-                            type=segment.type,
-                            source_file=segment.source_file,
-                            file_id=segment.file_id
-                        )
-                        reserved_silence.append(split_segment)
-                        reserved_silence_duration += remaining_needed
-                    else:
-                        reserved_silence.append(segment)
-                        reserved_silence_duration += segment.duration
+                reserved_silence.append(segment)
+                reserved_silence_duration += segment.duration
         
         # Build primary timeline with remaining silence
         reserved_ids = set(id(seg) for seg in reserved_silence)
         primary_candidates = [seg for seg in silence_segments if id(seg) not in reserved_ids]
-        # Sort by file_id and then by start time to maintain temporal order
+        
+        # Maintain temporal ordering when selecting primary silence
         primary_silence = sorted(primary_candidates, key=lambda x: (x.file_id, x.start))
         
-        # Create balanced segments using alternating approach
-        balanced_segments = self._alternate_segments_multi_file(speech_segments, primary_silence, 
-                                                              speech_target_ms, primary_silence_ms)
-        
-        # Intersperse reserved silence in long speech runs
-        final_segments = self._intersperse_reserved_silence(balanced_segments, reserved_silence)
-        
-        return final_segments
+        # Create a more natural timeline that maintains temporal proximity
+        return self._create_natural_timeline(speech_segments, primary_silence, 
+                                            speech_target_ms, primary_silence_ms,
+                                            reserved_silence)    
     
-    def _alternate_segments_multi_file(self, speech_segments: List[AudioSegmentInfo], 
-                                     silence_segments: List[AudioSegmentInfo],
-                                     speech_quota: float, silence_quota: float) -> List[AudioSegmentInfo]:
-        """Multi-file version of alternating segments algorithm with speech priority."""
-        balanced_segments = []
-        speech_quota_remaining = speech_quota
-        silence_quota_remaining = silence_quota
+    def _alternate_segments_multi_file(self, segments: List[AudioSegmentInfo], 
+                                speech_quota: float, silence_quota: float) -> List[AudioSegmentInfo]:
+        """Select segments while maintaining natural temporal order."""
+        # Sort all segments by file_id and start time
+        sorted_segments = sorted(segments, key=lambda x: (x.file_id, x.start))
         
-        # Allow 10% overage for preserving full speech segments
-        speech_quota_max = speech_quota * 1.1
+        # Initialize counters
+        speech_used = 0
+        silence_used = 0
+        result = []
         
-        speech_index = 0
-        silence_index = 0
-        last_type_added = None
-        
-        # Start with some silence for natural beginning
-        if silence_segments and silence_quota_remaining > 0:
-            first_segment = silence_segments[0]
-            if first_segment.duration > silence_quota_remaining * 0.25:
-                desired_duration = min(silence_quota_remaining * 0.2, first_segment.duration)
-                shortened = AudioSegmentInfo(
-                    start=first_segment.start,
-                    end=first_segment.start + (desired_duration / 1000),
-                    type=first_segment.type,
-                    source_file=first_segment.source_file,
-                    file_id=first_segment.file_id
-                )
-                balanced_segments.append(shortened)
-                silence_quota_remaining -= desired_duration
-            else:
-                balanced_segments.append(first_segment)
-                silence_quota_remaining -= first_segment.duration
-            silence_index = 1
-            last_type_added = "non-speech"
-        
-        # Alternate between speech and silence
-        while (speech_quota_remaining > 0 or silence_quota_remaining > 0) and \
-              (speech_index < len(speech_segments) or silence_index < len(silence_segments)):
-            
-            # Get next speech segment duration for decision making
-            next_speech_duration = speech_segments[speech_index].duration if speech_index < len(speech_segments) else 0
-            
-            add_speech = self._should_add_speech_with_priority(
-                last_type_added, speech_quota_remaining, silence_quota_remaining, 
-                speech_index, silence_index, len(speech_segments), len(silence_segments),
-                next_speech_duration, speech_quota_max
-            )
-            
-            if add_speech and speech_index < len(speech_segments):
-                segment = speech_segments[speech_index]
-                speech_index += 1
+        for segment in sorted_segments:
+            if segment.type == "speech" and speech_used < speech_quota:
+                if speech_used + segment.duration <= speech_quota:
+                    result.append(segment)
+                    speech_used += segment.duration
+                # Don't truncate speech
                 
-                # NEVER truncate speech segments - only add if they fit completely
-                # Allow up to 10% overage to preserve full speech
-                if segment.duration <= speech_quota_max - (speech_quota - speech_quota_remaining):
-                    balanced_segments.append(segment)
-                    speech_quota_remaining -= segment.duration
-                    last_type_added = "speech"
+            elif segment.type == "non-speech" and silence_used < silence_quota:
+                if silence_used + segment.duration <= silence_quota:
+                    result.append(segment)
+                    silence_used += segment.duration
                 else:
-                    # Speech doesn't fit even with overage - skip it
-                    speech_index -= 1  # Put it back for next decision
-                    # Force switch to silence if available
-                    if silence_index < len(silence_segments) and silence_quota_remaining > 0:
-                        add_speech = False
-                    else:
-                        # No silence available either - stop
-                        break
-            
-            if not add_speech and silence_index < len(silence_segments):
-                segment = silence_segments[silence_index]
-                silence_index += 1
-                
-                if segment.duration <= silence_quota_remaining:
-                    balanced_segments.append(segment)
-                    silence_quota_remaining -= segment.duration
-                else:
-                    # Silence CAN be truncated (less critical than speech)
-                    partial = AudioSegmentInfo(
-                        start=segment.start,
-                        end=segment.start + (silence_quota_remaining / 1000),
-                        type=segment.type,
-                        source_file=segment.source_file,
-                        file_id=segment.file_id
-                    )
-                    balanced_segments.append(partial)
-                    silence_quota_remaining = 0
-                
-                last_type_added = "non-speech"
+                    # Truncate silence if needed
+                    remaining = silence_quota - silence_used
+                    if remaining > 100:  # Only add if at least 100ms
+                        partial = AudioSegmentInfo(
+                            start=segment.start,
+                            end=segment.start + (remaining / 1000),
+                            type=segment.type,
+                            source_file=segment.source_file,
+                            file_id=segment.file_id
+                        )
+                        result.append(partial)
+                        silence_used = silence_quota
         
-        return balanced_segments
+        return result
     
     def _should_add_speech_with_priority(self, last_type: str, speech_quota: float, silence_quota: float,
                                        speech_index: int, silence_index: int, total_speech: int, 
@@ -726,12 +739,6 @@ class AudioProcessor:
         # Find remaining segments
         used_segments = set(id(segment) for segment in balanced_segments)
         remaining_segments = [seg for seg in all_segments if id(seg) not in used_segments]
-        
-        # Sort by file_id and then by start time to maintain temporal order within files
-        remaining_segments.sort(key=lambda x: (x.file_id, x.start))
-        
-        if not remaining_segments:
-            return
         
         # Split remaining segments
         dev_segments, train_segments = self._split_remaining_segments(remaining_segments)
