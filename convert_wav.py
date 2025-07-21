@@ -1184,6 +1184,11 @@ def main():
         dev_ratio=0.2,                 # 20% for DEV set
         silence_reserve_ratio=0.4,     # 40% of silence reserved for interspersing
     )
+    """
+    TODO: adjust config parameters to target_hours_speech and target_hours_silence, remove the speech_ratio
+    adjust the algorithm so that the priority is to fill the target_hours_speech and target_hours_silence for the TEST sete, irregardless of how much speech or silence is leftover for the DEV and TRAIN sets
+    
+    """
     
     # Example: Different speech ratios
     # config.speech_ratio = 0.3  # 30% speech, 70% silence
