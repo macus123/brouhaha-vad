@@ -32,16 +32,34 @@ class TimestampMapping:
 
 
 
+# @dataclass
+# class ProcessingConfig:
+#     """Configuration for audio processing."""
+#     target_hours: float = 1.0
+#     speech_ratio: float = 0.5  # 0.5 = 50% speech, 50% silence
+#     speech_padding_ms: int = 200
+#     create_splits: bool = True
+#     dev_ratio: float = 0.2
+#     silence_reserve_ratio: float = 0.4
+#     default_sample_rate: int = 44100  # Default sample rate in Hz
+    
 @dataclass
 class ProcessingConfig:
-    """Configuration for audio processing."""
-    target_hours: float = 1.0
-    speech_ratio: float = 0.5  # 0.5 = 50% speech, 50% silence
-    speech_padding_ms: int = 200
-    create_splits: bool = True
-    dev_ratio: float = 0.2
-    silence_reserve_ratio: float = 0.4
-    default_sample_rate: int = 44100  # Default sample rate in Hz
+    def __init__(self,
+                 target_hours_speech: float = 0.0675,
+                 target_hours_silence: float = 0.0675, 
+                 speech_padding_ms: float = 200.0,
+                 create_splits: bool = True,
+                 dev_ratio: float = 0.2,
+                 silence_reserve_ratio: float = 0.4,
+                 default_sample_rate: int = 16000):
+        self.target_hours_speech = target_hours_speech
+        self.target_hours_silence = target_hours_silence
+        self.speech_padding_ms = speech_padding_ms
+        self.create_splits = create_splits
+        self.dev_ratio = dev_ratio
+        self.silence_reserve_ratio = silence_reserve_ratio
+        self.default_sample_rate = default_sample_rate
 
 
 @dataclass

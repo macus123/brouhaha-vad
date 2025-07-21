@@ -363,10 +363,8 @@ class AudioProcessor:
         return truncated_sequence
 
     def create_balanced_timeline_multi_file(self, segments: List[AudioSegmentInfo]) -> List[AudioSegmentInfo]:
-        """Create balanced timeline from multiple files using the same core algorithms."""
-        target_ms = int(self.config.target_hours * 3600 * 1000)
-        speech_target_ms = target_ms * self.config.speech_ratio
-        silence_target_ms = target_ms * (1 - self.config.speech_ratio)
+        speech_target_ms = int(self.config.target_hours_speech * 3600 * 1000)
+        silence_target_ms = int(self.config.target_hours_silence * 3600 * 1000)
         
         # Separate speech and silence segments
         speech_segments, silence_segments = self._separate_segments_by_type(segments)
@@ -377,19 +375,22 @@ class AudioProcessor:
         print(f"Multi-file speech content: {self.format_duration(total_speech_ms)}")
         print(f"Multi-file non-speech content: {self.format_duration(total_silence_ms)}")
         
-        # Check if we have enough content
-        if total_speech_ms < speech_target_ms or total_silence_ms < silence_target_ms:
-            print(f"Warning: Insufficient audio to reach target duration")
-            # Adjust target proportionally
-            available_total = min(total_speech_ms / self.config.speech_ratio, 
-                                total_silence_ms / (1 - self.config.speech_ratio))
-            speech_target_ms = available_total * self.config.speech_ratio
-            silence_target_ms = available_total * (1 - self.config.speech_ratio)
-            print(f"Adjusting target - Speech: {self.format_duration(speech_target_ms)}, Silence: {self.format_duration(silence_target_ms)}")
+        # Check if we have enough content and adjust if needed
+        if total_speech_ms < speech_target_ms:
+            print(f"Warning: Insufficient speech audio to reach target")
+            print(f"  Available: {self.format_duration(total_speech_ms)}")
+            print(f"  Target: {self.format_duration(speech_target_ms)}")
+            speech_target_ms = total_speech_ms
+            
+        if total_silence_ms < silence_target_ms:
+            print(f"Warning: Insufficient silence audio to reach target")
+            print(f"  Available: {self.format_duration(total_silence_ms)}")
+            print(f"  Target: {self.format_duration(silence_target_ms)}")
+            silence_target_ms = total_silence_ms
         
-        # Apply sophisticated silence distribution algorithm (preserved from original)
-        return self._distribute_silence_intelligently_multi_file(speech_segments, silence_segments, 
-                                                               speech_target_ms, silence_target_ms)
+        # Use direct targets for distribution algorithm
+        return self._distribute_silence_intelligently_multi_file(speech_segments, silence_segments, speech_target_ms, silence_target_ms)
+
 
     def _create_natural_timeline(self, speech_segments: List[AudioSegmentInfo],
                             silence_segments: List[AudioSegmentInfo],
@@ -681,58 +682,88 @@ class AudioProcessor:
             print(f"  Warning: {set_name} set has insufficient content (speech: {self.format_duration(total_speech_ms)}, silence: {self.format_duration(total_silence_ms)})")
             return segments
         
-        # Use all available content, but apply balanced ratio
-        available_total_ms = total_speech_ms + total_silence_ms
-        target_speech_ms = available_total_ms * self.config.speech_ratio
-        target_silence_ms = available_total_ms * (1 - self.config.speech_ratio)
+        # For DEV/TRAIN, maintain similar ratio as original targets but use available content
+        total_target_ms = (self.config.target_hours_speech + self.config.target_hours_silence) * 3600 * 1000
+        if total_target_ms > 0:
+            target_ratio = self.config.target_hours_speech / (self.config.target_hours_speech + self.config.target_hours_silence)
+        else:
+            target_ratio = 0.5  # Default to 50/50 if no targets specified
+        
+        # Calculate available content and proportional targets
+        total_available_ms = total_speech_ms + total_silence_ms
+        target_speech_ms = total_available_ms * target_ratio
+        target_silence_ms = total_available_ms * (1 - target_ratio)
         
         if total_speech_ms < target_speech_ms:
-            speech_ratio = total_speech_ms / available_total_ms
             target_speech_ms = total_speech_ms
-            # Make sure we don't exceed available silence
-            target_silence_ms = min(available_total_ms - target_speech_ms, total_silence_ms)
+            target_silence_ms = min(total_silence_ms, total_available_ms - target_speech_ms)
         
         if total_silence_ms < target_silence_ms:
-            silence_ratio = total_silence_ms / available_total_ms
             target_silence_ms = total_silence_ms
-            # Make sure we don't exceed available speech
-            target_speech_ms = min(available_total_ms - target_silence_ms, total_speech_ms)
-        
-        # Final safeguard against zero targets
-        if target_speech_ms <= 0 or target_silence_ms <= 0:
-            print(f"  Warning: {set_name} targets too small, using all available content")
-            target_speech_ms = total_speech_ms
-            target_silence_ms = total_silence_ms
+            target_speech_ms = min(total_speech_ms, total_available_ms - target_silence_ms)
         
         print(f"  {set_name} targets - Speech: {self.format_duration(target_speech_ms)}, Silence: {self.format_duration(target_silence_ms)}")
         return self._distribute_silence_intelligently_multi_file(
             speech_segments, silence_segments, target_speech_ms, target_silence_ms
         )
         
-    def _split_remaining_segments(self, remaining_segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
-        """Split remaining segments into DEV and TRAIN sets."""
-        if not remaining_segments:
-            return [], []
+    # def _split_remaining_segments(self, remaining_segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
+    #     """Split remaining segments into DEV and TRAIN sets."""
+    #     if not remaining_segments:
+    #         return [], []
         
-        # Calculate split point based on dev_ratio
-        total_segments = len(remaining_segments)
+    #     # Calculate split point based on dev_ratio
+    #     total_segments = len(remaining_segments)
+    #     dev_count = int(total_segments * self.config.dev_ratio)
+        
+    #     # Ensure we have at least some segments for each set if possible
+    #     if dev_count == 0 and total_segments > 1:
+    #         dev_count = 1
+    #     elif dev_count == total_segments and total_segments > 1:
+    #         dev_count = total_segments - 1
+        
+    #     # Split the segments
+    #     dev_segments = remaining_segments[:dev_count]
+    #     train_segments = remaining_segments[dev_count:]
+        
+    #     print(f"    DEV: {len(dev_segments)} segments")
+    #     print(f"    TRAIN: {len(train_segments)} segments")
+        
+    #     return dev_segments, train_segments
+    
+    def _split_remaining_segments(self, remaining_segments: List[AudioSegmentInfo]) -> Tuple[List[AudioSegmentInfo], List[AudioSegmentInfo]]:
+        speech_segments = [seg for seg in remaining_segments if seg.type == "speech"]
+        
+        if speech_segments:
+            total_speech_ms = sum(seg.duration for seg in speech_segments)
+            
+            for i, seg in enumerate(speech_segments[:5]):  # Show first 5 for brevity
+                source_file = Path(seg.source_file).name
+                print(f"  - Speech segment #{i+1}: {source_file} {seg.start:.2f}s-{seg.end:.2f}s ({seg.duration/1000:.2f}s)")
+            if len(speech_segments) > 5:
+                print(f"  - ...and {len(speech_segments)-5} more speech segments")
+        
+        # Continue with normal split (or optionally move speech segments back to TEST)
+        non_speech_segments = [seg for seg in remaining_segments if seg.type == "non-speech"]
+        
+        # Calculate split point based on dev_ratio (using only non-speech segments)
+        total_segments = len(non_speech_segments)
         dev_count = int(total_segments * self.config.dev_ratio)
         
-        # Ensure we have at least some segments for each set if possible
         if dev_count == 0 and total_segments > 1:
             dev_count = 1
         elif dev_count == total_segments and total_segments > 1:
             dev_count = total_segments - 1
         
-        # Split the segments
-        dev_segments = remaining_segments[:dev_count]
-        train_segments = remaining_segments[dev_count:]
+        dev_segments = non_speech_segments[:dev_count]
+        train_segments = non_speech_segments[dev_count:]
         
-        print(f"    DEV: {len(dev_segments)} segments")
-        print(f"    TRAIN: {len(train_segments)} segments")
+        print(f"    DEV: {len(dev_segments)} segments (non-speech only)")
+        print(f"    TRAIN: {len(train_segments)} segments (non-speech only)")
+        print(f"    Unallocated speech: {len(speech_segments)} segments")
         
         return dev_segments, train_segments
-    
+
     def save_audio_with_cached_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
         # Use cached sample rate or get it once
         if source_file_path not in self.sample_rate_cache:
@@ -943,12 +974,12 @@ class BatchProcessor:
         return speech_ms, non_speech_ms
     
     def _process_temporal_set_stats(self, set_stats: SetStats, 
-                                  set_type: str,
-                                  output_dir: str,
-                                  speech_ms: float,
-                                  non_speech_ms: float,
-                                  input_files: List[FileProcessingInfo],
-                                  original_duration_hours: float) -> None:
+                                set_type: str,
+                                output_dir: str,
+                                speech_ms: float,
+                                non_speech_ms: float,
+                                input_files: List[FileProcessingInfo],
+                                original_duration_hours: float) -> None:
         """Process statistics for temporal sequence processing."""
         total_ms = speech_ms + non_speech_ms
         duration_hours = total_ms / 3600000
@@ -963,7 +994,14 @@ class BatchProcessor:
         # Calculate ratio accuracy (only for TEST set)
         if set_type == "TEST" and duration_hours > 0:
             speech_ratio = speech_hours / duration_hours
-            target_ratio = self.config.speech_ratio
+            
+            # Calculate target ratio from direct targets
+            total_target_hours = self.config.target_hours_speech + self.config.target_hours_silence
+            if total_target_hours > 0:
+                target_ratio = self.config.target_hours_speech / total_target_hours
+            else:
+                target_ratio = 0.5  # Default fallback
+            
             ratio_accuracy = 1 - abs(speech_ratio - target_ratio)
             self.batch_stats.speech_ratio_accuracy.append(ratio_accuracy)
         
@@ -1173,26 +1211,16 @@ class AudioProcessingPipeline:
         
         return batch_stats
 
-
 def main():
-    # Configure processing parameters
+    # Configure processing parameters with direct targets
     config = ProcessingConfig(
-        target_hours=0.135,              # Target X hour output for TEST set
-        speech_ratio=0.5,              # 50% speech, 50% silence (1:1 ratio)
+        target_hours_speech=1,    # Target hours for speech
+        target_hours_silence=1,   # Target hours for silence
         speech_padding_ms=200,         # 200ms padding around speech
         create_splits=True,            # Create DEV/TRAIN splits
         dev_ratio=0.2,                 # 20% for DEV set
         silence_reserve_ratio=0.4,     # 40% of silence reserved for interspersing
     )
-    """
-    TODO: adjust config parameters to target_hours_speech and target_hours_silence, remove the speech_ratio
-    adjust the algorithm so that the priority is to fill the target_hours_speech and target_hours_silence for the TEST sete, irregardless of how much speech or silence is leftover for the DEV and TRAIN sets
-    
-    """
-    
-    # Example: Different speech ratios
-    # config.speech_ratio = 0.3  # 30% speech, 70% silence
-    # config.speech_ratio = 0.7  # 70% speech, 30% silence
     
     # Load config into pipeline
     pipeline = AudioProcessingPipeline(config)
