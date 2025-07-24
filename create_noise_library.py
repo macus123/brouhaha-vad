@@ -110,7 +110,8 @@ def generate_noise_at_snr(reference_signal, sr, noise_data, target_snr):
     # If we need more, add random ones
     while len(selected_noise) < min(5, len(noise_data)):
         sample = random.choice(noise_data)
-        if sample not in selected_noise:
+        # Compare by file path instead of the entire dictionary
+        if all(s["path"] != sample["path"] for s in selected_noise):
             selected_noise.append(sample)
     
     # Mix the selected noise samples

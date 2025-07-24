@@ -1,0 +1,35 @@
+NOISE PROFILE SUMMARY
+====================
+
+low_freq_noise: 15 samples
+  Total duration: 1.26 seconds
+  Average duration: 0.08 seconds
+  Average energy distribution:
+    Low frequency (20-200Hz): 57.5%
+    Mid frequency (200Hz-2kHz): 23.5%
+    High frequency (2kHz+): 19.1%
+
+mid_freq_noise: 81 samples
+  Total duration: 2.29 seconds
+  Average duration: 0.03 seconds
+  Average energy distribution:
+    Low frequency (20-200Hz): 17.1%
+    Mid frequency (200Hz-2kHz): 51.9%
+    High frequency (2kHz+): 31.0%
+
+high_freq_noise: 26 samples
+  Total duration: 10.23 seconds
+  Average duration: 0.39 seconds
+  Average energy distribution:
+    Low frequency (20-200Hz): 7.5%
+    Mid frequency (200Hz-2kHz): 27.8%
+    High frequency (2kHz+): 64.7%
+
+broadband_noise: 53 samples
+  Total duration: 4.76 seconds
+  Average duration: 0.09 seconds
+  Average energy distribution:
+    Low frequency (20-200Hz): 26.4%
+    Mid frequency (200Hz-2kHz): 36.6%
+    High frequency (2kHz+): 37.1%
+
