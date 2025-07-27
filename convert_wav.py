@@ -51,6 +51,51 @@ class AudioProcessor:
         merged.append((current_start, current_end))
         return merged
     
+    # def load_and_analyze_multiple_files(self, file_infos: List[FileProcessingInfo]) -> Tuple[List[AudioSegmentInfo], Dict[str, float]]:
+    #     """Load and analyze multiple audio files for multi-file stitching."""
+    #     all_segments = []
+    #     file_durations = {}
+        
+    #     for i, file_info in enumerate(file_infos):
+    #         file_id = f"file_{i}"
+    #         print(f"Loading file {i+1}/{len(file_infos)}: {file_info.audio_path}")
+    #         audio = AudioSegment.from_file(file_info.audio_path)
+    #         self.audio_cache[file_id] = audio
+            
+    #         total_duration_ms = len(audio)
+    #         total_duration_sec = total_duration_ms / 1000
+    #         file_durations[file_id] = total_duration_sec
+
+    #         speech_segments = read_ground_truth(file_info.ground_truth_path)
+    #         padded_speech_segments = self._add_padding_to_speech(speech_segments, total_duration_sec)
+    #         merged_speech_segments = self._merge_overlapping_segments(padded_speech_segments)
+            
+    #         for start, end in merged_speech_segments:
+    #             all_segments.append(AudioSegmentInfo(
+    #                 start=start, 
+    #                 end=end, 
+    #                 type="speech", 
+    #                 source_file=file_info.audio_path,
+    #                 file_id=file_id
+    #             ))
+            
+    #         # Recalculate non-speech segments based on merged speech segments
+    #         merged_non_speech_segments = get_non_speech_segments(merged_speech_segments, total_duration_sec)
+            
+    #         for start, end in merged_non_speech_segments:
+    #             all_segments.append(AudioSegmentInfo(
+    #                 start=start, 
+    #                 end=end, 
+    #                 type="non-speech", 
+    #                 source_file=file_info.audio_path,
+    #                 file_id=file_id
+    #             ))
+        
+    #     # Sort segments by file_id and then by start time to maintain temporal order within files
+    #     all_segments.sort(key=lambda x: (x.file_id, x.start))
+        
+    #     return all_segments, file_durations
+    
     def load_and_analyze_multiple_files(self, file_infos: List[FileProcessingInfo]) -> Tuple[List[AudioSegmentInfo], Dict[str, float]]:
         """Load and analyze multiple audio files for multi-file stitching."""
         all_segments = []
@@ -66,20 +111,53 @@ class AudioProcessor:
             total_duration_sec = total_duration_ms / 1000
             file_durations[file_id] = total_duration_sec
 
-            speech_segments = read_ground_truth(file_info.ground_truth_path)
+            speech_segments_with_text = []
+            try:
+                with open(file_info.ground_truth_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('//'):
+                            parts = line.split('\t')
+                            if len(parts) >= 3:
+                                start = float(parts[0])
+                                end = float(parts[1])
+                                text = parts[2]  # Preserve the actual text content
+                                speech_segments_with_text.append((start, end, text))
+            except Exception as e:
+                print(f"Warning: Error reading ground truth file {file_info.ground_truth_path}: {e}")
+                speech_segments_with_text = []
+            
+            speech_segments = [(start, end) for start, end, _ in speech_segments_with_text]
             padded_speech_segments = self._add_padding_to_speech(speech_segments, total_duration_sec)
             merged_speech_segments = self._merge_overlapping_segments(padded_speech_segments)
-            
+    
+            segment_text_map = {}
+            for start, end, text in speech_segments_with_text:
+                segment_text_map[(start, end)] = text
+                
             for start, end in merged_speech_segments:
+                text = "speech"  # Default if no match
+                
+                # Look for exact match first
+                if (start, end) in segment_text_map:
+                    text = segment_text_map[(start, end)]
+                else:
+                    # Look for overlapping segments and use the first matching text
+                    for orig_start, orig_end in segment_text_map:
+                        # Check if segments overlap significantly
+                        if (start <= orig_end and end >= orig_start):
+                            text = segment_text_map[(orig_start, orig_end)]
+                            break
+                
                 all_segments.append(AudioSegmentInfo(
                     start=start, 
                     end=end, 
                     type="speech", 
                     source_file=file_info.audio_path,
-                    file_id=file_id
+                    file_id=file_id,
+                    text=text
                 ))
             
-            # Recalculate non-speech segments based on merged speech segments
             merged_non_speech_segments = get_non_speech_segments(merged_speech_segments, total_duration_sec)
             
             for start, end in merged_non_speech_segments:
@@ -88,24 +166,24 @@ class AudioProcessor:
                     end=end, 
                     type="non-speech", 
                     source_file=file_info.audio_path,
-                    file_id=file_id
+                    file_id=file_id,
+                    text=""  # Empty text for non-speech
                 ))
         
         # Sort segments by file_id and then by start time to maintain temporal order within files
         all_segments.sort(key=lambda x: (x.file_id, x.start))
         
         return all_segments, file_durations
-    
+
     def create_ground_truth_file(self, timestamps: List[TimestampMapping], output_path: str) -> None:
-        """Create ground truth file for recompiled audio - only include speech segments."""
         with open(output_path, 'w') as f:
             # Filter for speech segments only
             speech_timestamps = [ts for ts in timestamps if ts.type == "speech"]
             
             if speech_timestamps:
-                # Write only speech segments
                 for ts in speech_timestamps:
-                    f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\tspeech\n")
+                    text = ts.text if ts.text else "speech"
+                    f.write(f"{ts.output_start_sec:.3f}\t{ts.output_end_sec:.3f}\t{text}\n")
             else:
                 # No speech segments - write entire file duration with filename
                 if timestamps:
@@ -149,7 +227,8 @@ class AudioProcessor:
                 duration_sec=segment_duration_ms / 1000,
                 type=segment.type,
                 source_file=segment.source_file,
-                file_id=segment.file_id
+                file_id=segment.file_id,
+                text=segment.text
             ))
             
             # Append to compiled audio

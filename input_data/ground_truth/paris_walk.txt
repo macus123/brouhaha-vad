@@ -1,14 +1,14 @@
-95.003469	98.395344	Speech segment 1
-105.330969	109.667844	Speech segment 2
-148.395969	152.243469	Speech segment 3
-207.598394	209.657144	Speech segment 4
-223.140269	226.768394	Speech segment 5
-255.844019	268.939019	Speech segment 6
-270.980894	272.972144	Speech segment 7
-348.307069	348.830194	Speech segment 8
-403.184569	405.665194	Speech segment 9
-481.147069	485.821444	Speech segment 10
-487.390819	490.073944	Speech segment 11
+95.003469	98.395344	Speech segment 1 asdwads d
+105.330969	109.667844	Speech segment 2 dwasdwa a da wd
+148.395969	152.243469	Speech segment 3 wda awdas  asd
+207.598394	209.657144	Speech segment 4 dwas da s asa s 
+223.140269	226.768394	Speech segment 5 asd sa dwa wdaw
+255.844019	268.939019	Speech segment 6 adwa sdd sa s as 
+270.980894	272.972144	Speech segment 7 wa ds aw da sdwaa 
+348.307069	348.830194	Speech segment 8  wad sa d
+403.184569	405.665194	Speech segment 9 wad aw  wa
+481.147069	485.821444	Speech segment 10 wa sss 
+487.390819	490.073944	Speech segment 11 wdas 
 493.128319	493.448944	Speech segment 12
 493.617694	493.651444	Speech segment 13
 494.090194	494.461444	Speech segment 14

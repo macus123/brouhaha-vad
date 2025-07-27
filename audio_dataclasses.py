@@ -12,6 +12,7 @@ class AudioSegmentInfo:
     source_file: str = None  # Source file path
     file_id: str = None      # Unique file identifier
     duration: float = field(init=False)  # Duration in milliseconds
+    text: str = ""
     
     def __post_init__(self):
         self.duration = (self.end - self.start) * 1000
@@ -27,21 +28,9 @@ class TimestampMapping:
     output_end_sec: float
     duration_sec: float
     type: str
-    source_file: str = None  # Source file path
-    file_id: str = None      # Source file identifier
-
-
-
-# @dataclass
-# class ProcessingConfig:
-#     """Configuration for audio processing."""
-#     target_hours: float = 1.0
-#     speech_ratio: float = 0.5  # 0.5 = 50% speech, 50% silence
-#     speech_padding_ms: int = 200
-#     create_splits: bool = True
-#     dev_ratio: float = 0.2
-#     silence_reserve_ratio: float = 0.4
-#     default_sample_rate: int = 44100  # Default sample rate in Hz
+    source_file: str = None  
+    file_id: str = None     
+    text: str = ""
     
 @dataclass
 class ProcessingConfig:
