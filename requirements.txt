@@ -1,8 +1,5 @@
-pydub>=0.25.0
-pathlib
-typing
-dataclasses
-csv
-datetime
-os
-shutil
+pydub==0.25.1
+numpy==1.24.3
+torch==2.0.1
+torchaudio==2.0.1
+pathlib==1.0.1
