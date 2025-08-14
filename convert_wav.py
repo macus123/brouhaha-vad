@@ -1,5 +1,6 @@
 import csv
-import datetime
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from pydub import AudioSegment
@@ -19,7 +20,7 @@ class AudioProcessor:
     
     def format_duration(self, ms: float) -> str:
         seconds = ms / 1000
-        return str(datetime.timedelta(seconds=int(seconds)))
+        return str(timedelta(seconds=int(seconds)))
     
     def _add_padding_to_speech(self, speech_segments: List[Tuple[float, float]], total_duration_sec: float) -> List[Tuple[float, float]]:
         padded_segments = []
@@ -198,9 +199,8 @@ class AudioProcessor:
             timestamp_map[-1].duration_sec = timestamp_map[-1].output_end_sec - timestamp_map[-1].output_start_sec
         
         return compiled_audio, timestamp_map
-    
+
     def group_segments_into_temporal_sequences(self, segments: List[AudioSegmentInfo]) -> Dict[str, List[List[AudioSegmentInfo]]]:
-        # Group segments by file
         file_segments = {}
         for segment in segments:
             if segment.file_id not in file_segments:
@@ -208,10 +208,9 @@ class AudioProcessor:
             file_segments[segment.file_id].append(segment)
         
         file_sequences = {}
+        all_used_segments = []
         
-        # Process each file
         for file_id, file_segs in file_segments.items():
-            # Sort by start time
             file_segs.sort(key=lambda x: x.start)
             sequences = []
             current_sequence = []
@@ -220,18 +219,15 @@ class AudioProcessor:
             has_silence = False
             
             min_sequence_length = 3.0  # minimum target length: seconds
-            
             max_gap = 0.5  # Maximum gap to consider segments as part of same sequence
             
             for segment in file_segs:
                 if not current_sequence:
-                    # Start new sequence
                     current_sequence.append(segment)
                     current_duration = segment.duration / 1000  # Convert ms to seconds
                     has_speech = segment.type == "speech"
                     has_silence = segment.type == "non-speech"
                 else:
-                    # Check if this segment is temporally continuous with the previous one
                     prev_segment = current_sequence[-1]
                     gap = segment.start - prev_segment.end
                     
@@ -242,61 +238,74 @@ class AudioProcessor:
                         has_speech = has_speech or segment.type == "speech"
                         has_silence = has_silence or segment.type == "non-speech"
                     else:
-                        # If sequence is long enough and has both speech and silence, finalize it
-                        if current_duration >= min_sequence_length and has_speech and has_silence:
+                        should_finalize = (
+                            (current_duration >= min_sequence_length and has_speech and has_silence) or
+                            (current_duration >= min_sequence_length * 1.5) or
+                            (gap > 2.0)
+                        )
+                        
+                        if should_finalize:
                             sequences.append(current_sequence)
                             current_sequence = [segment]
                             current_duration = segment.duration / 1000
                             has_speech = segment.type == "speech"
                             has_silence = segment.type == "non-speech"
-                        # If sequence doesn't meet criteria, try to extend it despite the gap
-                        elif current_duration < min_sequence_length or not (has_speech and has_silence):
-                            # If adding this segment would create a balanced sequence, include it
-                            if (has_speech and segment.type == "non-speech") or (has_silence and segment.type == "speech"):
-                                current_sequence.append(segment)
-                                current_duration += segment.duration / 1000
-                                has_speech = has_speech or segment.type == "speech"
-                                has_silence = has_silence or segment.type == "non-speech"
-                            # If gap is too large (> 2 seconds) or sequence is getting too long, finalize it anyway
-                            elif gap > 2.0 or current_duration > min_sequence_length * 2:
-                                sequences.append(current_sequence)
-                                current_sequence = [segment]
-                                current_duration = segment.duration / 1000
-                                has_speech = segment.type == "speech"
-                                has_silence = segment.type == "non-speech"
+                        else:
+                            # Try to extend despite gap to create better sequences
+                            current_sequence.append(segment)
+                            current_duration += segment.duration / 1000
+                            has_speech = has_speech or segment.type == "speech"
+                            has_silence = has_silence or segment.type == "non-speech"
             
             # Add the last sequence if it exists
             if current_sequence:
                 sequences.append(current_sequence)
             
-            # Perform a final pass to merge very short sequences with neighbors
-            if len(sequences) > 1:
-                merged_sequences = []
-                current_merged = sequences[0]
-                
-                for i in range(1, len(sequences)):
-                    current_seq = current_merged
-                    next_seq = sequences[i]
-                    
-                    # If current sequence is too short and adding next wouldn't make it too long
-                    current_length = sum(s.duration / 1000 for s in current_seq)
-                    next_length = sum(s.duration / 1000 for s in next_seq)
-                    
-                    if current_length < min_sequence_length and current_length + next_length < min_sequence_length * 3:
-                        # Merge with next sequence
-                        current_merged = current_seq + next_seq
-                    else:
-                        merged_sequences.append(current_merged)
-                        current_merged = next_seq
-                
-                # Add the last merged sequence
-                merged_sequences.append(current_merged)
-                sequences = merged_sequences
+            # Track all segments that were included in sequences
+            for sequence in sequences:
+                all_used_segments.extend(sequence)
             
             file_sequences[file_id] = sequences
         
-        return file_sequences 
-
+        # GUARDRAIL: Find and rescue orphaned segments
+        all_input_segments = segments
+        used_segment_ids = set(id(seg) for seg in all_used_segments)
+        orphaned_segments = [seg for seg in all_input_segments if id(seg) not in used_segment_ids]
+        
+        if orphaned_segments:
+            print(f"⚠️  Found {len(orphaned_segments)} orphaned segments - creating standalone sequences")
+            
+            # Group orphaned segments by file
+            orphaned_by_file = {}
+            for seg in orphaned_segments:
+                if seg.file_id not in orphaned_by_file:
+                    orphaned_by_file[seg.file_id] = []
+                orphaned_by_file[seg.file_id].append(seg)
+            
+            # Create standalone sequences for orphaned segments
+            for file_id, orphan_segs in orphaned_by_file.items():
+                if file_id not in file_sequences:
+                    file_sequences[file_id] = []
+                
+                # Sort orphaned segments by time
+                orphan_segs.sort(key=lambda x: x.start)
+                
+                # Create individual sequences for each orphaned segment
+                for seg in orphan_segs:
+                    file_sequences[file_id].append([seg])
+                    print(f"   Created standalone sequence: {seg.type} {seg.duration/1000:.1f}s from {seg.file_id}")
+        
+        final_used_segments = []
+        for sequences in file_sequences.values():
+            for sequence in sequences:
+                final_used_segments.extend(sequence)
+        
+        if len(final_used_segments) != len(all_input_segments):
+            print(f"❌ SEGMENT LOSS DETECTED: {len(all_input_segments)} input → {len(final_used_segments)} output")
+        else:
+            print(f"✅ All {len(all_input_segments)} segments preserved in output")
+        
+        return file_sequences
     
     def save_temporal_sequences(self, segments: List[AudioSegmentInfo], split_name: str, output_dir: str) -> List[str]:
         """Save temporal sequences and return paths to created files with accurate statistics tracking."""
@@ -424,7 +433,7 @@ class AudioProcessor:
             silence_target_ms = total_silence_ms
         
         # Use direct targets for distribution algorithm
-        return self._distribute_silence_intelligently_multi_file(speech_segments, silence_segments, speech_target_ms, silence_target_ms)
+        return self._distribute_silence_intelligently_multi_file(speech_segments, silence_segments, speech_target_ms, silence_target_ms)    
     
     def _create_natural_timeline(self, speech_segments: List[AudioSegmentInfo],
                         silence_segments: List[AudioSegmentInfo],
@@ -450,6 +459,11 @@ class AudioProcessor:
         include_all_speech = total_speech <= speech_quota
         include_all_silence = total_silence <= silence_quota
         
+        # Calculate average speech segment size for minimum quota calculation
+        avg_speech_segment_size = 0
+        if speech_segments:
+            avg_speech_segment_size = total_speech / len(speech_segments)
+        
         # Calculate quota per file based on available content
         file_speech_content = {}
         file_silence_content = {}
@@ -457,17 +471,52 @@ class AudioProcessor:
             file_speech_content[file_id] = sum(s.duration for s in segments if s.type == "speech")
             file_silence_content[file_id] = sum(s.duration for s in segments if s.type == "non-speech")
         
-        # Assign quota proportionally to each file
+        # Get minimum viable speech segment size from this dataset
+        min_speech_segment = min([s.duration for s in speech_segments], default=1000)
+        
+        # Calculate a reasonable minimum quota per file that can fit at least one speech segment
+        min_quota_per_file = max(min_speech_segment * 1.2, avg_speech_segment_size)
+        
+        # If we can't give each file a reasonable quota, prioritize files with more content
+        usable_files = {}
+        if not include_all_speech and len(segments_by_file) * min_quota_per_file > speech_quota:
+            print(f"  Warning: Too many files for quota. Prioritizing files with more content.")
+            # Sort files by amount of speech content (descending)
+            sorted_files = sorted(file_speech_content.items(), key=lambda x: x[1], reverse=True)
+            
+            # Calculate how many files we can include with reasonable quotas
+            max_files = int(speech_quota / min_quota_per_file)
+            max_files = max(1, max_files)  # Ensure we use at least one file
+            
+            # Include only top files that have a reasonable amount of content
+            usable_files = {f_id: True for f_id, _ in sorted_files[:max_files]}
+            print(f"  Using {len(usable_files)} of {len(segments_by_file)} available files")
+        else:
+            # All files can be used
+            usable_files = {f_id: True for f_id in segments_by_file}
+        
+        # Assign quota proportionally to each usable file
         file_speech_quota = {}
         file_silence_quota = {}
+        usable_speech_content = sum(file_speech_content[f_id] for f_id in usable_files)
+        usable_silence_content = sum(file_silence_content[f_id] for f_id in usable_files)
+        
         for file_id in segments_by_file:
+            if file_id not in usable_files:
+                file_speech_quota[file_id] = 0
+                file_silence_quota[file_id] = 0
+                continue
+                
             # If we need all speech, set quota to all available speech in this file
             if include_all_speech:
                 file_speech_quota[file_id] = file_speech_content[file_id]
             else:
-                # Otherwise, distribute quota proportionally
-                if total_speech > 0:
-                    file_speech_quota[file_id] = speech_quota * (file_speech_content[file_id] / total_speech)
+                # Otherwise, distribute quota proportionally among usable files
+                if usable_speech_content > 0:
+                    file_speech_quota[file_id] = speech_quota * (file_speech_content[file_id] / usable_speech_content)
+                    # Apply minimum quota if this file has enough content
+                    if file_speech_content[file_id] >= min_quota_per_file:
+                        file_speech_quota[file_id] = max(file_speech_quota[file_id], min_quota_per_file)
                 else:
                     file_speech_quota[file_id] = 0
                     
@@ -475,14 +524,20 @@ class AudioProcessor:
             if include_all_silence:
                 file_silence_quota[file_id] = file_silence_content[file_id]
             else:
-                if total_silence > 0:
-                    file_silence_quota[file_id] = silence_quota * (file_silence_content[file_id] / total_silence)
+                if usable_silence_content > 0:
+                    file_silence_quota[file_id] = silence_quota * (file_silence_content[file_id] / usable_silence_content)
                 else:
                     file_silence_quota[file_id] = 0
         
         # Select segments from each file respecting temporal order
         timeline = []
+        unused_speech_quota = 0
+        
+        # First pass: select segments based on initial quotas
         for file_id, segments in segments_by_file.items():
+            if file_id not in usable_files:
+                continue
+                
             file_timeline = []
             speech_used = 0
             silence_used = 0
@@ -525,7 +580,43 @@ class AudioProcessor:
                                 file_timeline.append(partial)
                                 silence_used = file_silence_quota[file_id]
             
+            # Track unused quota for potential redistribution
+            unused_speech_quota += (file_speech_quota[file_id] - speech_used)
+            
             timeline.extend(file_timeline)
+        
+        # Second pass: Try to use remaining quota on files that have segments that didn't fit
+        # (Simplified approach - just try to add more segments from largest files first)
+        if unused_speech_quota > min_quota_per_file and not include_all_speech:
+            print(f"  Redistributing {unused_speech_quota/1000:.2f}s unused speech quota")
+            
+            # Sort files by amount of speech content (descending)
+            sorted_files = sorted(
+                [(f_id, segments) for f_id, segments in segments_by_file.items() if f_id in usable_files],
+                key=lambda x: file_speech_content[x[0]], 
+                reverse=True
+            )
+            
+            for file_id, segments in sorted_files:
+                if unused_speech_quota <= 0:
+                    break
+                    
+                # Find speech segments that weren't included in the first pass
+                used_ids = set(id(s) for s in timeline if s.file_id == file_id)
+                remaining_segments = [s for s in segments if s.type == "speech" and id(s) not in used_ids]
+                
+                if not remaining_segments:
+                    continue
+                    
+                # Sort by start time to maintain temporal order
+                remaining_segments.sort(key=lambda x: x.start)
+                
+                for segment in remaining_segments:
+                    if segment.duration <= unused_speech_quota:
+                        timeline.append(segment)
+                        unused_speech_quota -= segment.duration
+                        if unused_speech_quota <= 0:
+                            break
         
         # Intersperse reserved silence in long speech runs
         final_segments = self._intersperse_reserved_silence(timeline, reserved_silence)
@@ -533,45 +624,51 @@ class AudioProcessor:
         return final_segments
     
     def _distribute_silence_intelligently_multi_file(self, speech_segments: List[AudioSegmentInfo], 
-                                                silence_segments: List[AudioSegmentInfo], 
-                                                speech_target_ms: float, silence_target_ms: float) -> List[AudioSegmentInfo]:
-        """Multi-file version of sophisticated silence distribution with improved temporal representation."""
-        # Reserve silence for interspersing (same algorithm)
-        reserved_silence_ms = silence_target_ms * self.config.silence_reserve_ratio
-        primary_silence_ms = silence_target_ms - reserved_silence_ms
+                                                    silence_segments: List[AudioSegmentInfo], 
+                                                    speech_target_ms: float, silence_target_ms: float) -> List[AudioSegmentInfo]:
+        """Multi-file version with improved handling of scarce silence."""
+        
+        # Calculate available silence
+        total_silence_ms = sum(s.duration for s in silence_segments)
+        
+        # If silence is scarce, don't reserve any for interspersing
+        if total_silence_ms <= silence_target_ms:
+            reserved_silence_ms = 0
+            primary_silence_ms = silence_target_ms
+            reserved_silence = []
+        else:
+            # Normal reservation when we have plenty of silence
+            reserved_silence_ms = silence_target_ms * self.config.silence_reserve_ratio
+            primary_silence_ms = silence_target_ms - reserved_silence_ms
+            
+            # Reserve silence for interspersing (existing logic)
+            silence_for_reservation = sorted(silence_segments.copy(), key=lambda x: x.duration)
+            reserved_silence = []
+            reserved_silence_duration = 0
+            
+            reservation_count = max(1, int(len(silence_for_reservation) * 0.3))
+            for i in range(min(reservation_count, len(silence_for_reservation))):
+                segment = silence_for_reservation[i]
+                if reserved_silence_duration < reserved_silence_ms:
+                    reserved_silence.append(segment)
+                    reserved_silence_duration += segment.duration
         
         # Sort segments by their original temporal position
         speech_segments.sort(key=lambda x: (x.file_id, x.start))
-        
-        # CHANGE: Sort silence segments by file and position instead of duration
         silence_segments.sort(key=lambda x: (x.file_id, x.start))
         
-        # Create a copy for reservation (we'll still need some silence for interspersing)
-        silence_for_reservation = sorted(silence_segments.copy(), key=lambda x: x.duration)
+        # Build primary timeline with all available silence when scarce
+        if reserved_silence:
+            reserved_ids = set(id(seg) for seg in reserved_silence)
+            primary_candidates = [seg for seg in silence_segments if id(seg) not in reserved_ids]
+        else:
+            primary_candidates = silence_segments  # Use all silence
         
-        # Reserve short silence segments for interspersing
-        reserved_silence = []
-        reserved_silence_duration = 0
-        
-        # Take some percentage of shortest silence segments for reservation
-        reservation_count = max(1, int(len(silence_for_reservation) * 0.3))
-        for i in range(min(reservation_count, len(silence_for_reservation))):
-            segment = silence_for_reservation[i]
-            if reserved_silence_duration < reserved_silence_ms:
-                reserved_silence.append(segment)
-                reserved_silence_duration += segment.duration
-        
-        # Build primary timeline with remaining silence
-        reserved_ids = set(id(seg) for seg in reserved_silence)
-        primary_candidates = [seg for seg in silence_segments if id(seg) not in reserved_ids]
-        
-        # Maintain temporal ordering when selecting primary silence
         primary_silence = sorted(primary_candidates, key=lambda x: (x.file_id, x.start))
         
-        # Create a more natural timeline that maintains temporal proximity
         return self._create_natural_timeline(speech_segments, primary_silence, 
                                             speech_target_ms, primary_silence_ms,
-                                            reserved_silence)    
+                                            reserved_silence)
     
     def _intersperse_reserved_silence(self, balanced_segments: List[AudioSegmentInfo], 
                                     reserved_silence: List[AudioSegmentInfo]) -> List[AudioSegmentInfo]:
@@ -706,7 +803,6 @@ class AudioProcessor:
             print("No remaining content for DEV/TRAIN splits")
             return
         
-        # Filter remaining segments based on content needs
         if need_all_silence and need_all_speech:
             print("  Both speech and silence are insufficient for targets - no content for DEV/TRAIN")
             return
@@ -726,7 +822,6 @@ class AudioProcessor:
         # Split remaining segments into DEV and TRAIN
         dev_segments, train_segments = self._split_remaining_segments(remaining_segments)
         
-        # Create DEV set
         if dev_segments:
             # Apply the same balanced timeline algorithm to DEV set
             dev_balanced_segments = self._create_balanced_subset(dev_segments, "DEV")
@@ -747,7 +842,6 @@ class AudioProcessor:
         
         # Create TRAIN set
         if train_segments:
-            # Apply the same balanced timeline algorithm to TRAIN set
             train_balanced_segments = self._create_balanced_subset(train_segments, "TRAIN")
             
             print(f"Creating TRAIN temporal sequences...")
@@ -824,13 +918,11 @@ class AudioProcessor:
         return dev_segments, train_segments
 
     def save_audio_with_cached_sample_rate(self, audio: AudioSegment, output_path: Path, source_file_path: str) -> None:
-        # Use cached sample rate or get it once
         if source_file_path not in self.sample_rate_cache:
             self.sample_rate_cache[source_file_path] = self.get_sample_rate_from_file(source_file_path)
         
         sample_rate = self.sample_rate_cache[source_file_path]
         
-        # Direct export without temporary file when possible
         audio.export(str(output_path), format="wav", parameters=["-ar", str(sample_rate)])
 
     def get_sample_rate_from_file(self, file_path: str) -> int:
@@ -843,11 +935,9 @@ class AudioProcessor:
             return self.config.default_sample_rate
     
     def _calculate_totals(self, data: List) -> Tuple[float, float]:
-        """Calculate total speech and non-speech durations from segments or timestamps."""
         if not data:
             return 0.0, 0.0
         
-        # Handle AudioSegmentInfo objects
         if hasattr(data[0], 'duration'):
             speech_ms = sum(item.duration for item in data if item.type == "speech")
             non_speech_ms = sum(item.duration for item in data if item.type == "non-speech")
@@ -867,14 +957,13 @@ class AudioProcessor:
         return speech_segments, silence_segments
 
 class DirectoryScanner:
-    """Handles scanning of input directories for audio files."""
     
     @staticmethod
     def scan_input_directory(input_dir: str = "input_data") -> List[FileProcessingInfo]:
         """Scan input_data directory structure to find audio files and match with ground truth."""
         base_dir = Path(input_dir)
-        audio_dir = base_dir / "audio"
-        ground_truth_dir = base_dir / "ground_truth"
+        audio_dir = base_dir / "Audio"
+        ground_truth_dir = base_dir / "Ground"
         
         if not audio_dir.exists():
             print(f"Error: Audio directory not found at {audio_dir}")
@@ -909,7 +998,6 @@ class DirectoryScanner:
 
 
 class BatchProcessor:
-    """Handles batch processing of multiple audio files with comprehensive statistics."""
     
     def __init__(self, config: ProcessingConfig):
         self.config = config
@@ -1168,10 +1256,6 @@ class BatchProcessor:
                 continue
     
     def _create_summary_csv(self, batch_stats: BatchStats, output_dir: str) -> None:
-        """Create a comprehensive CSV summary using sequence statistics."""
-        import csv
-        from datetime import datetime
-        
         output_path = Path(output_dir)
         summary_file = output_path / "batch_processing_summary.csv"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1273,8 +1357,8 @@ class AudioProcessingPipeline:
 def main():
     # Configure processing parameters with direct targets
     config = ProcessingConfig(
-        target_hours_speech=1,    # Target hours for speech
-        target_hours_silence=1,   # Target hours for silence
+        target_hours_speech=0.05,    # Target hours for speech
+        target_hours_silence=0,   # Target hours for silence
         speech_padding_ms=200,         # 200ms padding around speech
         create_splits=True,            # Create DEV/TRAIN splits
         dev_ratio=0.2,                 # 20% for DEV set
@@ -1286,7 +1370,7 @@ def main():
     
     # Process directory with temporal sequence output approach
     stats = pipeline.process_directory(
-        input_dir="input_data",
+        input_dir="VAD_Input",
         output_dir="Recompiled_Output"
     )
     
